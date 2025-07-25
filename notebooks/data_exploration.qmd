@@ -1,0 +1,1617 @@
+---
+title: "Data Exploration"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Data Exploration"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+# Load data
+
+## Geometries
+
+```{r load_data geom}
+# Uganda - https://data.humdata.org/dataset/cod-ab-uga
+
+sf_uga <- (
+  st_read(
+    file.path(raw_data_dir, "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+    layer = "uga_admbnda_adm2_ubos_20200824"
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_pcode = admin1pcode,
+    adm1_en = admin1name_en,
+    geometry = shape
+  )
+)
+
+# Mozambique OCHA - https://data.humdata.org/dataset/cod-ab-moz
+
+sf_ocha_moz <- (
+  st_read(
+    file.path(raw_data_dir, "moz_adm_20190607b_shp", "moz_admbnda_adm1_ine_20190607.shp", fsep = "/"),
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_pcode,
+    adm1_pt, 
+    geometry
+  )
+)
+
+# Mozambique FEWS NET - https://datadryad.org/dataset/doi:10.5061/dryad.vq83bk42w
+
+sf_fewsnet_moz <- (
+  st_read(
+    file.path(raw_data_dir, "harvestStat", "hvstat_africa_boundary_v1.0.gpkg", fsep = "/"),
+    layer = "hvstat_africa_boundary_v1.0"
+  )
+  %>% filter(
+    ADMIN0 == "Mozambique"
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    fnid, 
+    admin1
+  )
+)
+```
+
+## Population - https://fdw.fews.net/api/cropproductionfacts/?format=csv&cpcv2=R01122AC&indicator=crop:quantity&indicator=crop:yield&indicator=crop:planted&indicator=crop:harvested&country_code=MZ&fields=simple
+
+```{r}
+(
+  read_csv(
+    file.path(raw_data_dir, "fews_net_maize_yield_and_production_mozambique.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    (crop_production_system == "All (PS)")
+  )
+  # %>% select(unit)
+  %>% unique()
+)
+```
+
+
+```{r}
+df_population_moz <- (
+  read_csv(
+    file.path(raw_data_dir, "fews_net_maize_yield_and_production_mozambique.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    (crop_production_system == "All (PS)")
+  )
+  %>% mutate(
+    year = year(period_date)
+  )
+  %>% select(
+    admin1 = admin_1,
+    year,
+    population
+  )
+  %>% distinct()
+  %>% arrange(admin1, year)
+)
+```
+
+```{r}
+df_population_moz
+```
+
+
+
+## DIEM - https://data.humdata.org/dataset/fao-diem-monitoring-system-household-surveys-aggregated-data
+
+https://data-in-emergencies.fao.org/search?q=income
+
+
+```{r load data diem}
+
+df_diem_shock_uga_new <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_household_surveys_aggregated_data_income_shocks_and_needs_thematic_areas_sud_kivu_new.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+   %>% mutate(
+    date = as.Date(coll_mid_date, format = "%m/%d/%Y"),
+  )
+)
+
+df_diem_shock_uga_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_household_surveys_aggregated_data_income_shocks_and_needs_thematic_areas_sud_kivu_arc.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(`Middle of data collection`, format = "%m/%d/%Y"),
+  )
+)
+
+
+df_diem_shock_moz_new <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_aggregated_data_income_shocks_and_needs_thematic_areas_moz.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+)
+
+df_diem_shock_moz_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_aggregated_data_income_shocks_and_needs_thematic_areas_moz_2021.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(`Middle of data collection`, format = "%m/%d/%Y"),
+  )
+)
+
+df_diem_fs_moz_new <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_aggregated_data_food_security_thematic_area_moz.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+)
+
+df_diem_fs_moz_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "diem_aggregated_data_food_security_thematic_area_moz_2021.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+)
+```
+
+## Food Prices
+
+```{r load data food prices}
+# WFP - https://data.humdata.org/dataset/global-wfp-food-prices
+food_prices_files <- list.files(file.path(raw_data_dir, "wfp_food_prices", fsep = "/"))
+list_food_prices <- list()
+for (i in seq(length(food_prices_files))) {
+  list_food_prices[[i]] <- (
+    read_csv(
+      file.path(raw_data_dir, "wfp_food_prices", food_prices_files[i], fsep = "/"),
+      show_col_types = FALSE
+    )
+    %>% filter(
+    category == "cereals and tubers"
+    )
+  )
+}
+
+# FEWS NET - https://fdw.fews.net/api/marketpricefacts/?format=csv&schedule=Weekly&start_date=&end_date=&cpcv2=R01122AC&country_code=MZ&price_type=Retail&product_source=Local&is_active=&fields=simple
+
+df_food_prices_fewsnet_moz_maize <- (
+  read_csv(
+    file.path(raw_data_dir, "fews_net_maize_prices_mozambique.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = start_date + 14
+  )
+  %>% select(
+    date,
+    admin1 = admin_1,
+    admin2 = admin_2,
+    market,
+    latitude,
+    longitude,
+    price = value
+  )
+)
+```
+
+
+## Crop yield and production - https://datadryad.org/dataset/doi:10.5061/dryad.vq83bk42w
+
+```{r load data crop yield}
+df_maize_yield_prod <- (
+  read_csv(
+    file.path(raw_data_dir, "harvestStat", "hvstat_africa_data_v1.0.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    (product == "Maize")
+    & (crop_production_system == "All (PS)")
+  )
+)
+```
+
+
+# Data Processing
+
+## DIEM
+
+
+```{r}
+
+df_diem_shock_uga_new_clean <- (
+  df_diem_shock_uga_new
+  %>% select(
+    date,
+    round,
+    adm1_pcode,
+    adm1_name,
+    num_surveys = surveys,
+    tot_income_median,
+    tot_income_ci_low,
+    tot_income_ci_high,
+    perc_crop_producers = hh_agricactivity_1,
+    perc_female_head = hh_gender_2,
+    perc_no_education = hh_education_1,
+    perc_married = hh_maritalstat_2,
+    perc_prod_and_sale_crops_3_months = income_main_1,
+    perc_cold_3_months = shock_coldtemporhail_1,
+    perc_drought_3_months = shock_drought_1,
+    perc_flood_3_months = shock_flood_1,
+    perc_hurricane_3_months = shock_hurricane_1,
+    # perc_mvt_restrict_3_months = shock_mvtrestrict_1,
+    perc_covid_border_closed_3_months = covid_borderclosed_1,
+    perc_covid_stay_at_home_3_months = covid_stayhome_1,
+    perc_covid_ban_gathering_3_months = covid_gatherings_1,
+    perc_covid_closure_markets_3_months = covid_marketclosed_1
+  )
+)
+df_diem_shock_uga_arc_clean <- (
+  df_diem_shock_uga_arc
+  %>% select(
+    date,
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    adm1_name = "Admin 1 name",
+    num_surveys = "Nb. of households surveyed",
+    tot_income_median = "total income - median",
+    tot_income_ci_low = "total income - ci low",
+    tot_income_ci_high = "total income - ci high",
+    perc_crop_producers = "hh agric activity - crop production",
+    perc_female_head = "gender head of hh - female",
+    perc_no_education = "education head of hh - none",
+    perc_married = "marital status head of hh - married",
+    perc_prod_and_sale_crops_3_months = "main income - staple crops",
+    perc_cold_3_months = "shock - cold temperatures or hail",
+    perc_drought_3_months = "shock - drought",
+    perc_flood_3_months = "shock - flood",
+    perc_hurricane_3_months = "shock - hurricane or cyclone",
+    # perc_mvt_restrict_3_months = shock_mvtrestrict_1,
+    perc_covid_border_closed_3_months = "covid effect - border closed",
+    perc_covid_stay_at_home_3_months = "covid effect - stay at home",
+    perc_covid_ban_gathering_3_months = "covid effect - ban on gatherings",
+    perc_covid_closure_markets_3_months = "covid effect - closure food markets"
+  )
+)
+  
+df_diem_shock_uga <- (
+  bind_rows(df_diem_shock_uga_arc_clean, df_diem_shock_uga_new_clean)
+  %>% mutate(
+    adm1_name = str_to_title(adm1_name),
+  )
+)
+
+df_diem_shock_moz_new_clean <- (
+  df_diem_shock_moz_new
+  %>% select(
+    date = coll_mid_date,
+    round,
+    adm1_pcode,
+    adm1_name,
+    num_surveys = surveys,
+    tot_income_median,
+    tot_income_ci_low,
+    tot_income_ci_high,
+    perc_crop_producers = hh_agricactivity_1,
+    perc_female_head = hh_gender_2,
+    perc_no_education = hh_education_1,
+    perc_married = hh_maritalstat_2,
+    perc_prod_and_sale_crops_3_months = income_main_1,
+    perc_cold_3_months = shock_coldtemporhail_1,
+    perc_drought_3_months = shock_drought_1,
+    perc_flood_3_months = shock_flood_1,
+    perc_hurricane_3_months = shock_hurricane_1,
+  )
+)
+df_diem_shock_moz_arc_clean <- (
+  df_diem_shock_moz_arc
+  %>% select(
+    date,
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    adm1_name = "Admin 1 name",
+    num_surveys = "Nb. of households surveyed",
+    tot_income_median = "total income - median",
+    tot_income_ci_low = "total income - ci low",
+    tot_income_ci_high = "total income - ci high",
+    perc_crop_producers = "hh agric activity - crop production",
+    perc_female_head = "gender head of hh - female",
+    perc_no_education = "education head of hh - none",
+    perc_married = "marital status head of hh - married",
+    perc_prod_and_sale_crops_3_months = "main income - staple crops",
+    perc_cold_3_months = "shock - cold temperatures or hail",
+    perc_drought_3_months = "shock - drought",
+    perc_flood_3_months = "shock - flood",
+    perc_hurricane_3_months = "shock - hurricane or cyclone"
+  )
+)
+  
+df_diem_shock_moz <- (
+  bind_rows(df_diem_shock_moz_arc_clean, df_diem_shock_moz_new_clean)
+  %>% mutate(
+    adm1_name = str_to_title(adm1_name),
+  )
+)
+    
+df_diem_fs_moz_new_clean <- (
+  df_diem_fs_moz_new
+  %>% select(
+    round,
+    adm1_pcode,
+    perc_begged_30_days = cs_begged_1,
+    perc_borrowed_30_days = cs_borrowed_money_1,
+    perc_borrowed_or_help_30_days = cs_borrowed_or_helped_1,
+    perc_purc_food_on_credit_30_days = cs_credit_1,
+    perc_eat_away_30_days = cs_eat_elsewhere_1,
+    perc_migrate_30_days = cs_hh_migration_1,
+    perc_illegal_30_days = cs_illegal_1,
+    perc_left_school_30days = cs_no_school_1
+  )
+)
+
+df_diem_fs_moz_arc_clean <- (
+  df_diem_fs_moz_arc
+  %>% select(
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    perc_begged_30_days = "cs emergency begged - yes",
+    perc_borrowed_30_days = "cs stress borrowed money - yes",
+    perc_borrowed_or_help_30_days = "cs stress borrowed or helped - yes",
+    perc_purc_food_on_credit_30_days = "cs stress credit - yes",
+    perc_eat_away_30_days = "cs stress eat elsewhere - yes",
+    perc_migrate_30_days = "cs emergency hh migration - yes",
+    perc_illegal_30_days = "cs emergency illegal - yes",
+    perc_left_school_30days = "cs crisis - no school - yes"
+  )
+)
+
+df_diem_fs_moz <- bind_rows(df_diem_fs_moz_arc_clean, df_diem_fs_moz_new_clean)
+
+sf_diem_moz <- (
+  sf_ocha_moz
+  %>% merge(
+    df_diem_shock_moz,
+    by = c("adm1_pcode"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_diem_fs_moz,
+    by = c("round", "adm1_pcode"),
+    all.x = TRUE
+  )
+)
+```
+
+## Food prices
+
+```{r}
+sf_food_prices_wfp_uga <- (
+  bind_rows(list_food_prices)
+  %>% filter(
+    countryiso3 == "UGA"
+  )
+  %>% select(
+    date,
+    admin1,
+    admin2,
+    market,
+    latitude,
+    longitude,
+    commodity,
+    unit,
+    price
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    price = as.numeric(price)
+  )
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+)
+
+sf_food_prices_wfp_moz <- (
+  bind_rows(list_food_prices)
+  %>% filter(
+    countryiso3 == "MOZ"
+  )
+  %>% select(
+    date,
+    admin1,
+    admin2,
+    market,
+    latitude,
+    longitude,
+    commodity,
+    unit,
+    price
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    price = as.numeric(price)
+  )
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+)
+
+sf_food_prices_fewsnet_moz_maize <- (
+  df_food_prices_fewsnet_moz_maize
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+)
+```
+
+## Crop yield
+
+```{r}
+df_maize_yield_prod_moz <- (
+  df_maize_yield_prod
+  %>% filter(
+    country == "Mozambique"
+  )
+  %>% mutate(
+    date = as.Date(paste0(harvest_year, "-", harvest_month, "-01"), format = "%Y-%m-%d"),
+    year = harvest_year,
+    admin1 = admin_1
+  )
+  %>% merge(
+    df_population_moz,
+    by = c("admin1", "year"),
+    all.x = TRUE
+  )
+  %>% select(
+    date,
+    fnid,
+    admin1,
+    area,
+    population,
+    production,
+    yield
+  )
+  %>% mutate(
+    prod_per_person = production / population,
+  )
+  %>% arrange(
+    admin1, date
+  )
+)
+sf_maize_yield_prod_moz <- (
+  sf_fewsnet_moz
+  %>% merge(
+    df_maize_yield_prod_moz,
+    by = c("fnid", "admin1"),
+    all.x = TRUE
+  )
+)
+```
+
+
+# Plots
+
+## Mozambique
+
+### Income and shocks Maps
+
+```{r}
+#| fig-height: 7
+#| fig-width: 10
+
+base_plot <- (
+  sf_diem_moz
+  %>% filter(round == 7)
+  %>% select(
+    perc_crop_producers,
+    perc_female_head,
+    perc_no_education,
+    perc_prod_and_sale_crops_3_months,
+    perc_drought_3_months,
+    perc_flood_3_months
+  )
+  %>% ggplot()
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 18),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+)
+
+p1 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_crop_producers))
+  + scale_fill_distiller(
+    name = "Crop producers (%)",
+    palette = "YlOrBr",
+    direction = 1,
+    na.value = "white",
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p2 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_female_head))
+  + scale_fill_distiller(
+    name = "Female head of household (%)",
+    na.value = "white",
+    palette = "BuPu",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p3 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_no_education))
+  + scale_fill_distiller(
+    name = "No education (%)",
+    na.value = "white",
+    palette = "Greys",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p4 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_prod_and_sale_crops_3_months))
+  + scale_fill_distiller(
+    name = "Income from crop (%)",
+    na.value = "white",
+    palette = "Greens",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p5 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_drought_3_months))
+  + scale_fill_distiller(
+    name = "Drought in last 3 months (%)",
+    palette = "Reds",
+    direction = 1,
+    na.value = "gray"
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p6 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_flood_3_months))
+  + scale_fill_distiller(
+    name = "Flood in last 3 months (%)",
+    palette = "Blues",
+    direction = 1,
+    na.value = "gray"
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+(
+  (p1 + p2 + p3) /
+  (p4 + p5 + p6)
+  + plot_annotation(
+    title = "Mozambique - DIEM Aggregate Survey Data",
+    subtitle = "Income and Shocks, October 2024",
+    theme = theme(
+      plot.title = element_text(size = 20, hjust = 0.5),
+      plot.subtitle = element_text(size = 16, hjust = 0.5)
+    )
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "diem_income_shocks_moz.png", fsep = "/"),
+  width = 10,
+  height = 7,
+  units = "in"
+)
+```
+
+### Food Security Maps
+
+```{r}
+#| fig-height: 7
+#| fig-width: 10
+
+base_plot <- (
+  sf_diem_moz
+  %>% filter(round == 7)
+  %>% select(
+    perc_begged_30_days,
+    perc_borrowed_30_days,
+    perc_migrate_30_days,
+    perc_illegal_30_days
+  )
+  %>% ggplot()
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 18),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+)
+
+p1 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_begged_30_days))
+  + scale_fill_distiller(
+    name = "Begged for food (%)",
+    palette = "Greens",
+    direction = 1,
+    na.value = "white",
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p2 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_borrowed_30_days))
+  + scale_fill_distiller(
+    name = "Borrowed Money (%)",
+    na.value = "white",
+    palette = "Blues",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p3 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_migrate_30_days))
+  + scale_fill_distiller(
+    name = "Migrate (%)",
+    na.value = "white",
+    palette = "Reds",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+p4 <- (
+  base_plot
+  + geom_sf(aes(fill = perc_illegal_30_days))
+  + scale_fill_distiller(
+    name = "Illegal activity (%)",
+    na.value = "white",
+    palette = "Greys",
+    direction = 1
+  )
+  + guides(
+    fill = guide_colorbar(barheight = unit(150, "pt"))
+  )
+)
+
+(
+  (p1 + p2 + p3 + p4)
+  + plot_annotation(
+    title = "Mozambique - DIEM Survey Data",
+    subtitle = "Food Insecurity Metrics (last 30 days), October 2024",
+    theme = theme(
+      plot.title = element_text(size = 20, hjust = 0.5),
+      plot.subtitle = element_text(size = 16, hjust = 0.5)
+    )
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "diem_food_security_moz.png", fsep = "/"),
+  width = 10,
+  height = 7,
+  units = "in",
+  bg = "transparent"
+)
+```
+
+### Drought and illegal activity over time
+
+```{r}
+#| fig-width: 6
+#| fig-height: 7
+sf_diem_moz_ts <- (
+  sf_diem_moz
+  %>% group_by(adm1_name)
+  %>% mutate(
+    max_drought_by_adm = max(perc_drought_3_months, na.rm = TRUE),
+    max_illegal_by_adm = max(perc_illegal_30_days, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    drought = perc_drought_3_months / max_drought_by_adm,
+    illegal = perc_illegal_30_days / max_illegal_by_adm
+  )
+  %>% select(
+    date,
+    adm1_name,
+    drought,
+    illegal
+  )
+  %>% pivot_longer(
+    cols = c(drought, illegal),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% filter(adm1_name != "Maputo City")
+)
+min_year <- min(year(sf_diem_moz_ts$date))
+max_year <- max(year(sf_diem_moz_ts$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_diem_moz_ts)
+  + geom_line(
+    mapping = aes(x = date, y = value, color = variable),
+    linewidth = 1.2
+  )
+  + geom_point(
+    mapping = aes(x = date, y = value, color = variable),
+    size = 2
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 2,
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_markdown(size = 15, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 13, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+    # legend.position = "inside",
+    # legend.position.inside = c(0.75, 0.2)
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + scale_y_continuous(
+    limits = c(0, 1.05),
+    breaks = pretty_breaks(n = 3)
+  )
+  + scale_color_manual(
+    values = c("drought" = "firebrick", "illegal" = "slategray"),
+    # labels = c("drought" = "", "illegal" = "")
+  )
+  + labs(
+    title = "Respondents reporting impact of",
+    subtitle = "<span style='color:firebrick;'>**drought (3 months)**</span> and <span style='color:slategray;'>**illegal activity (1 month)**</span>",
+    x = "Date",
+    y = "Relative change",
+  )
+  + guides(
+    color = "none"
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "diem_drought_and_illegal_moz.png", fsep = "/"),
+  width = 6,
+  height = 7,
+  units = "in",
+  bg = "transparent"
+)
+```
+
+
+
+
+### Food Prices - WFP
+
+```{r}
+(
+  sf_food_prices_wfp_moz
+  %>% as.data.frame()
+  %>% filter(
+    # commodity == "Cassava (dry)",
+    commodity == "Maize (white)"
+    # commodity == "Maize meal"
+    # date == max(date, na.rm = TRUE)  # filter for latest date
+  )
+  %>% group_by(market)
+  %>% count()
+  %>% arrange(desc(n))
+)
+```
+
+#### Map
+
+
+
+```{r}
+sf_food_prices_wfp_moz_maize_latest <- (
+  sf_food_prices_wfp_moz
+  %>% filter(
+    commodity == "Maize (white)",
+    # date == max(date, na.rm = TRUE)  # filter for latest date
+  )
+  %>% group_by(market)
+  %>% slice(which.max(date))  # select latest date for each market
+)
+(
+  ggplot()
+  + geom_sf(data = sf_ocha_moz, fill = "white", color = "black")
+  + geom_sf(
+    data = sf_food_prices_wfp_moz_maize_latest,
+    # mapping = aes(size = usdprice),
+    mapping = aes(color = price),
+    size = 4
+    # color = "firebrick"
+  )
+  + scale_color_distiller(
+    name = "Maize price (USD/Kg)",
+    palette = "YlOrRd",
+    direction = 1,
+    na.value = "gray"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 18),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+)
+```
+
+#### By market (markets with most reports)
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 7
+sf_food_prices_wfp_moz_top_markets <- (
+  sf_food_prices_wfp_moz
+  %>% filter(
+    (commodity == "Maize (white)")
+    # & (date >= "2021-01-01")
+  )
+  %>% group_by(market)
+  %>% filter(n() > 75)
+)
+min_year <- min(year(sf_food_prices_moz_top_markets$date))
+max_year <- max(year(sf_food_prices_moz_top_markets$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_food_prices_wfp_moz_top_markets)
+  + geom_line(
+    mapping = aes(x = date, y = price),
+    color = "cornflowerblue",
+    linewidth = 1.2
+  )
+  + geom_point(
+    mapping = aes(x = date, y = price),
+    color = "cornflowerblue",
+    size = 2
+  )
+  + facet_wrap(
+    ~ market,
+    ncol = 2,
+    # strip.position = "right"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_text(size = 18, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 15, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15, angle = 90, vjust = 0.5),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+    # legend.position = "inside",
+    # legend.position.inside = c(0.75, 0.2)
+  )
+  # + scale_color_paletteer_d(
+  #   palette = "ggthemes::Tableau_10",
+  #   name = "Market"
+  # )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + labs(
+    title = "Mozambique",
+    subtitle = "Maize prices by <span style='color:cornflowerblue;'>**market**</span>",
+    x = "Date",
+    y = "Price (MZN/Kg)",
+    color = "Market"
+  )
+)
+```
+
+#### By admin 1 area
+
+```{r}
+#| fig-width: 9
+#| fig-height: 8
+sf_food_prices_wfp_by_adm1 <- (
+  sf_food_prices_wfp_moz
+  %>% filter(
+    (commodity == "Maize (white)")
+    & (admin1 != "Maputo")
+    # & (date >= "2021-01-01")
+  )
+  # %>% group_by(market)
+  # %>% filter(n() > 60)
+  %>% group_by(admin1, date)
+  %>% summarise(
+    avg_price = mean(price, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+min_year <- min(year(sf_food_prices_wfp_by_adm1$date))
+max_year <- max(year(sf_food_prices_wfp_by_adm1$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_food_prices_wfp_by_adm1)
+  + geom_line(
+    mapping = aes(x = date, y = avg_price),
+    color = "firebrick",
+    linewidth = 1.2,
+    alpha = 0.7
+  )
+  + geom_point(
+    mapping = aes(x = date, y = avg_price),
+    color = "firebrick",
+    size = 2,
+    alpha = 0.7
+  )
+  + facet_wrap(
+    ~ admin1,
+    ncol = 2,
+    scales = "fixed"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(5, "pt"),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_text(size = 18, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 15, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15, angle = 90, vjust = 0.5),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + labs(
+    title = "Mozambique",
+    subtitle = "Maize prices by <span style='color:firebrick;'>**admin 1 area**</span>",
+    x = "Date", 
+    y = "Price (MZN/Kg)",
+  )
+)
+```
+
+### Food Prices - FEWS Net
+
+```{r}
+(
+  sf_food_prices_fewsnet_moz_maize
+  %>% group_by(market)
+  %>% count()
+  %>% arrange(desc(n))
+)
+```
+
+#### Map
+
+
+
+```{r}
+sf_food_prices_fewsnet_moz_maize_latest <- (
+  sf_food_prices_fewsnet_moz_maize
+  %>% na.omit()
+  %>% group_by(market)
+  %>% slice(which.max(date))  # select latest date for each market
+)
+(
+  ggplot()
+  + geom_sf(data = sf_fewsnet_moz, fill = "white", color = "black")
+  + geom_sf(
+    data = sf_food_prices_fewsnet_moz_maize_latest,
+    mapping = aes(color = price),
+    size = 4
+  )
+  + scale_color_distiller(
+    name = "Maize price (MZN/Kg)",
+    palette = "YlOrRd",
+    direction = 1,
+    na.value = "gray"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 18),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+)
+```
+
+#### By market (sample markets)
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 7
+sf_food_prices_fewsnet_moz_sample_markets <- (
+  sf_food_prices_fewsnet_moz_maize
+  %>% na.omit()
+  %>% group_by(market)
+  %>% filter(n() > 300)
+  %>% ungroup()
+  %>% filter(market %in% sample(unique(market), 9))
+)
+min_year <- min(year(sf_food_prices_fewsnet_moz_sample_markets$date))
+max_year <- max(year(sf_food_prices_fewsnet_moz_sample_markets$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_food_prices_fewsnet_moz_sample_markets)
+  + geom_line(
+    mapping = aes(x = date, y = price),
+    color = "cornflowerblue",
+    linewidth = 1.2
+  )
+  + geom_point(
+    mapping = aes(x = date, y = price),
+    color = "cornflowerblue",
+    size = 2
+  )
+  + facet_wrap(
+    ~ market,
+    ncol = 3,
+    # strip.position = "right"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_text(size = 18, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 15, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15, angle = 90, vjust = 0.5),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+    # legend.position = "inside",
+    # legend.position.inside = c(0.75, 0.2)
+  )
+  # + scale_color_paletteer_d(
+  #   palette = "ggthemes::Tableau_10",
+  #   name = "Market"
+  # )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + labs(
+    title = "Mozambique",
+    subtitle = "Maize prices by <span style='color:cornflowerblue;'>**market**</span>",
+    x = "Date",
+    y = "Price (MZN/Kg)",
+    color = "Market"
+  )
+)
+```
+
+#### By admin 1 area
+
+```{r}
+#| fig-width: 9
+#| fig-height: 8
+sf_food_prices_fewsnet_maize_by_adm1 <- (
+  sf_food_prices_fewsnet_moz_maize
+  %>% filter(
+    (admin1 != "Maputo")
+    & (date >= "2013-01-01")
+  )
+  %>% group_by(admin1, date)
+  %>% summarise(
+    avg_price = mean(price, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+min_year <- min(year(sf_food_prices_fewsnet_maize_by_adm1$date))
+max_year <- max(year(sf_food_prices_fewsnet_maize_by_adm1$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_food_prices_fewsnet_maize_by_adm1)
+  + geom_line(
+    mapping = aes(x = date, y = avg_price),
+    color = "darkorange",
+    linewidth = 1.2,
+    alpha = 0.7
+  )
+  + geom_point(
+    mapping = aes(x = date, y = avg_price),
+    color = "darkorange",
+    size = 2,
+    alpha = 0.7
+  )
+  + facet_wrap(
+    ~ admin1,
+    ncol = 2,
+    scales = "fixed"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(5, "pt"),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_text(size = 18, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 15, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15, angle = 90, vjust = 0.5),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + labs(
+    title = "Mozambique - FEWS Net Data",
+    subtitle = "<span style='color:darkorange;'>**Maize**</span> prices",
+    x = "Date", 
+    y = "Price (MZN/Kg)",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "fewsnet_maize_price_moz.png", fsep = "/"),
+  width = 9,
+  height = 8,
+  units = "in",
+  bg = "transparent"
+)
+```
+
+### Crop Yields
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 9
+
+plot_color <- paletteer_d("MoMAColors::Alkalay2")[4]
+sf_maize_prod_moz <- (
+  sf_maize_yield_prod_moz
+  %>% as.data.frame()
+  %>% filter(
+    # (admin1 != "Maputo")
+    (date >= "2013-01-01")
+  )
+  %>% select(
+    date,
+    admin1,
+    prod_per_person
+  )
+  %>% na.omit()
+)
+min_year <- min(year(sf_maize_prod_moz$date))
+max_year <- max(year(sf_maize_prod_moz$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = sf_maize_prod_moz)
+  + geom_line(
+    mapping = aes(x = date, y = prod_per_person),
+    color = plot_color,
+    linewidth = 1.2,
+    alpha = 0.7
+  )
+  + geom_point(
+    mapping = aes(x = date, y = prod_per_person),
+    color = plot_color,
+    size = 2,
+    alpha = 0.7
+  )
+  + facet_wrap(
+    ~ admin1,
+    ncol = 2,
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.spacing.y = unit(5, "pt"),
+    panel.spacing.x = unit(15, "pt"),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_text(size = 18, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 15, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15, angle = 90, vjust = 0.5),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + scale_y_continuous(
+      labels = label_scientific(),
+      breaks = pretty_breaks(n = 3)
+  )
+  + labs(
+    title = "Mozambique",
+    subtitle = paste0("Maize production per person by <span style='color:", plot_color, ";'>**admin 1 area**</span>"),
+    x = "Date", 
+    y = "Production (Metric Tons/Person)",
+  )
+)
+```
+
+```{r}
+df_maize_yield_prod
+```
+
+
+### Maize Yield and Price over time
+
+```{r}
+#| fig-width: 6
+#| fig-height: 7
+
+df_food_prices_fewsnet_maize_by_adm1 <- (
+  sf_food_prices_fewsnet_maize_by_adm1
+  %>% group_by(admin1)
+  %>% mutate(
+    max_price = max(avg_price, na.rm = TRUE),
+  )
+  %>% ungroup()
+  %>% mutate(
+    variable = "Price",
+    rel_price = avg_price / max_price,
+  )
+  %>% as.data.frame
+  %>% select(
+    admin1,
+    date,
+    variable,
+    value = rel_price
+  )
+)
+    
+df_maize_prod_moz <- (
+  sf_maize_prod_moz
+  %>% group_by(admin1)
+  %>% mutate(
+    max_prod_per_person = max(prod_per_person, na.rm = TRUE),
+  )
+  %>% mutate(
+    variable = "Yield",
+    rel_yield = prod_per_person / max_prod_per_person,
+  )
+  %>% as.data.frame()
+  %>% select(
+    admin1,
+    date,
+    variable,
+    value = rel_yield
+  )
+)
+
+df_maize_price_yield_moz <- (
+  df_food_prices_fewsnet_maize_by_adm1
+  %>% bind_rows(df_maize_prod_moz)
+)
+  
+
+min_year <- min(year(df_maize_price_yield_moz$date))
+max_year <- max(year(df_maize_price_yield_moz$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  ggplot(data = df_maize_price_yield_moz)
+  + geom_line(
+    mapping = aes(x = date, y = value, color = variable),
+    linewidth = 1.2
+  )
+  + geom_point(
+    mapping = aes(x = date, y = value, color = variable),
+    size = 2
+  )
+  + facet_wrap(
+    ~ admin1,
+    ncol = 2,
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.title = element_markdown(size = 15, hjust = 0.5),
+    plot.subtitle = element_markdown(size = 13, hjust = 0.5),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks.y = element_line(linewidth = 1),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.background = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12, face = "bold")
+    # legend.position = "inside",
+    # legend.position.inside = c(0.75, 0.2)
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+  + scale_y_continuous(
+    limits = c(0, 1.05),
+    breaks = pretty_breaks(n = 3)
+  )
+  + scale_color_manual(
+    values = c("Yield" = "darkorange", "Price" = "forestgreen"),
+  )
+  + labs(
+    title = "Mozambique - FEWS Net Data",
+    subtitle = "Maize <span style='color:darkorange;'>**yield**</span> and <span style='color:forestgreen;'>**price**</span>",
+    x = "Date",
+    y = "Relative change",
+  )
+  + guides(
+    color = "none"
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "diem_drought_and_illegal_moz.png", fsep = "/"),
+  width = 6,
+  height = 7,
+  units = "in",
+  bg = "transparent"
+)
+```
+
+## Uganda
+
+```{r}
+#| fig-width: 5
+#| fig-height: 8
+
+min_year <- min(year(df_diem_shock_uga$date))
+max_year <- max(year(df_diem_shock_uga$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+
+base_plot <- (
+  ggplot(data = df_diem_shock_uga)
+  + theme(
+      panel.background = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      panel.grid = element_blank(),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 14),
+      axis.text = element_text(size = 13),
+      axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[length(years)] + 1, "-01-01")))
+  )
+)
+
+
+p1 <- (
+  base_plot
+  + geom_line(
+      aes(x = date, y = perc_covid_border_closed_3_months),
+      color = "turquoise4",
+      linewidth = 1.2
+  )
+  + labs(
+    x = "Date", 
+    y = "Closed Borders"
+  )
+)
+
+p2 <- (
+  base_plot
+  + geom_line(
+    aes(x = date, y = perc_covid_stay_at_home_3_months),
+    color = "turquoise4",
+    linewidth = 1.2
+  )
+  + labs(
+    x = "Date",
+    y = "Stay at home"
+  )
+)
+
+p3 <- (
+  base_plot
+  + geom_line(
+    aes(x = date, y = perc_covid_ban_gathering_3_months),
+    color = "turquoise4",
+    linewidth = 1.2
+  )
+  + labs(
+    x = "Date",
+    y = "Banned gathering"
+  )
+)
+
+p4 <- (
+  base_plot
+  + geom_line(
+    aes(x = date, y = perc_covid_closure_markets_3_months),
+    color = "turquoise4",
+    linewidth = 1.2
+  )
+  + labs(
+    x = "Date",
+    y = "Market Closure"
+  )
+)
+
+
+(
+  (p1 / p2 / p3 / p4)
+  + plot_layout(
+    axes = "collect"
+  )
+)
+
+# ggsave(
+#   filename = file.path(img_dir, "model_inputs.png"),
+#   width = 6,
+#   height = 8,
+#   units = "in"
+# )
+```

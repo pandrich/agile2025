@@ -1,2 +1,3 @@
 # agile2025
-Repo for the work on the Agile 2025 project in Oxford
+
+Repo for the Oxford Martin Agile 2025 project
