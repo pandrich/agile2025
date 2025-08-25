@@ -1,0 +1,2496 @@
+---
+title: "Uganda Disaster Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(tidyterra)
+library(readxl)
+library(sf)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Data Exploration"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+# Functions
+
+```{r}
+clean_column_name <- function(cols) {
+  cols <- tolower(cols)
+  cols <- gsub("[.:,'()-/?]", "", cols)
+  cols <- str_squish(cols)
+  for (i in 1:length(cols)) {
+    cols[i] <- paste0(unlist(strsplit(cols[i], " ")), collapse = "_")
+  }
+  cols
+}
+```
+
+
+# Parameters
+
+```{r params}
+elgon_region <- c(
+  "Bududa", 
+  "Bukwo",
+  "Bulambuli",
+  "Kapchorwa",
+  "Kween",
+  "Manafwa", 
+  "Mbale", 
+  "Namisindwa",
+  "Sironko", 
+  "Tororo"
+)
+
+karamoja_region <- c(
+  "Abim",
+  "Amudat",
+  "Kaabong", 
+  "Karenga",
+  "Kotido", 
+  "Moroto",
+  "Nabilatuk",
+  "Nakapiripirit",
+  "Napak"
+)
+
+commodities_to_plot <- c("Maize (white)", "Maize flour", "Cassava flour", "Sorghum")
+```
+
+
+# Load data
+
+## Geometries
+
+```{r load_data geom}
+# Uganda - https://data.humdata.org/dataset/cod-ab-uga
+sf_uga <- (
+  st_read(
+    file.path(raw_data_dir, "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+    layer = "uga_admbnda_adm2_ubos_20200824"
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_pcode = admin1pcode,
+    adm1_name = admin1name_en,
+    adm2_name = admin2name_en,
+    geometry = shape
+  )
+)
+```
+
+## Population
+
+```{r}
+df_pop <- (
+  read_csv(
+    file.path(raw_data_dir, "unfpa_admpop_adm2_2023.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = adm1_en,
+    adm1_pcode,
+    adm2_name = adm2_en,
+    pop = t_tl
+  )
+)
+```
+
+```{r}
+head(df_pop)
+```
+
+
+## Internally Displaced People
+
+```{r}
+df_idp_names <- (
+  read_csv(
+    file.path(raw_data_dir, "idmc_event_data_uga.csv"),
+    n_max = 0,
+    show_col_types = FALSE
+  ) 
+  %>% names()
+)
+
+df_idp <- (
+  read_csv(
+    file.path(raw_data_dir, "idmc_event_data_uga.csv"),
+    col_names = df_idp_names,
+    show_col_types = FALSE,
+    skip = 2
+  )
+)
+```
+
+```{r}
+df_idp
+```
+
+
+## Harvested Areas (2025-06-09) - https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/SWPENT
+
+### Rice
+
+```{r}
+sf_glo_h_rice_rainfed <- (
+  terra::rast(
+    x = file.path(
+      raw_data_dir, 
+      "spam_disaggregated_crop_data",
+      "spam2020_global",
+      "Global_Geotiff",
+      "spam2020V2r0_global_harvested_area",
+      "spam2020_V2r0_global_H_RICE_R.tif"
+    ),
+  )
+  %>% terra::crop(st_union(sf_uga))
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  ggplot()
+  + geom_spatraster(
+    data = sf_glo_h_rice_rainfed,
+    mapping = aes(fill = spam2020_V2r0_global_H_RICE_R)
+  )
+  + scale_fill_paletteer_c(
+    "ggthemes::Orange",
+    na.value = "white"
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfed Rice Harvest Area",
+    fill = "Harvest Area (ha)"
+  )
+)
+ggsave(
+  file = "rice_harvest_rainfed.png",
+  path = fig_dir
+)
+```
+
+
+### Maize
+
+```{r}
+sf_glo_h_maize_rainfed <- (
+  terra::rast(
+    x = file.path(
+      raw_data_dir, 
+      "spam_disaggregated_crop_data",
+      "spam2020_global",
+      "Global_Geotiff",
+      "spam2020V2r0_global_harvested_area",
+      "spam2020_V2r0_global_H_MAIZ_R.tif"
+    ),
+  )
+  %>% terra::crop(st_union(sf_uga))
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  ggplot()
+  + geom_spatraster(
+    data = sf_glo_h_maize_rainfed,
+    mapping = aes(fill = spam2020_V2r0_global_H_MAIZ_R)
+  )
+  + scale_fill_paletteer_c(
+    "ggthemes::Orange",
+    na.value = "white",
+    direction = 1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfed Maize Harvest Area",
+    fill = "Harvest Area (ha)"
+  )
+)
+ggsave(
+  file = "maize_harvest_rainfed.png",
+  path = fig_dir
+)
+```
+
+
+### Sorghum
+
+```{r}
+sf_glo_h_sorg_rainfed <- (
+  terra::rast(
+    x = file.path(
+      raw_data_dir, 
+      "spam_disaggregated_crop_data",
+      "spam2020_global",
+      "Global_Geotiff",
+      "spam2020V2r0_global_harvested_area",
+      "spam2020_V2r0_global_H_SORG_R.tif"
+    ),
+  )
+  %>% terra::crop(st_union(sf_uga))
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  ggplot()
+  + geom_spatraster(
+    data = sf_glo_h_sorg_rainfed,
+    mapping = aes(fill = spam2020_V2r0_global_H_SORG_R)
+  )
+  + scale_fill_paletteer_c(
+    "ggthemes::Orange",
+    na.value = "white",
+    direction = 1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfed Sorghum Harvest Area",
+    fill = "Harvest Area (ha)"
+  )
+)
+ggsave(
+  file = "sorghum_harvest_rainfed.png",
+  path = fig_dir
+)
+```
+
+### Sweet Potatoes
+
+```{r}
+sf_glo_h_swpo_rainfed <- (
+  terra::rast(
+    x = file.path(
+      raw_data_dir, 
+      "spam_disaggregated_crop_data",
+      "spam2020_global",
+      "Global_Geotiff",
+      "spam2020V2r0_global_harvested_area",
+      "spam2020_V2r0_global_H_SWPO_R.tif"
+    ),
+  )
+  %>% terra::crop(st_union(sf_uga))
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  ggplot()
+  + geom_spatraster(
+    data = sf_glo_h_swpo_rainfed,
+    mapping = aes(fill = spam2020_V2r0_global_H_SWPO_R)
+  )
+  + scale_fill_paletteer_c(
+    "ggthemes::Orange",
+    na.value = "white",
+    direction = 1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfed Sweet Potato Harvest Area",
+    fill = "Harvest Area (ha)"
+  )
+)
+ggsave(
+  file = "sweet_potato_harvest_rainfed.png",
+  path = fig_dir
+)
+```
+
+### Plantain
+
+```{r}
+sf_glo_h_plantain_rainfed <- (
+  terra::rast(
+    x = file.path(
+      raw_data_dir, 
+      "spam_disaggregated_crop_data",
+      "spam2020_global",
+      "Global_Geotiff",
+      "spam2020V2r0_global_harvested_area",
+      "spam2020_V2r0_global_H_PLNT_R.tif"
+    ),
+  )
+  %>% terra::crop(st_union(sf_uga))
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  ggplot()
+  + geom_spatraster(
+    data = sf_glo_h_plantain_rainfed,
+    mapping = aes(fill = spam2020_V2r0_global_H_PLNT_R)
+  )
+  + scale_fill_paletteer_c(
+    "ggthemes::Orange",
+    na.value = "white",
+    direction = 1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfed Plantain Harvest Area",
+    fill = "Harvest Area (ha)"
+  )
+)
+ggsave(
+  file = "plantains_harvest_rainfed.png",
+  path = fig_dir
+)
+```
+
+## Disasters - EMDAT
+
+```{r}
+df_dis_emdat <- (
+  read_csv(
+    file.path(proc_data_dir, "uganda_relevant_disasters_2010_2025_cleaned.csv"),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    !(is.na(start_date) | is.na(end_date) | is.na(location))
+  )
+  %>% mutate(
+    start_date = as.Date.character(start_date, format = "%m/%d/%y"),
+    end_date = as.Date.character(end_date, format = "%m/%d/%y")
+  )
+  %>% arrange(desc(total_affected))
+)
+```
+
+```{r}
+df_dis_emdat_by_adm <- (
+  df_dis_emdat
+  %>% filter(
+    !is.na(total_affected),
+    total_affected > 0
+  )
+  %>% select(
+    disno,
+    disaster_type,
+    start_date,
+    end_date,
+    location,
+    total_affected
+  )
+  %>% mutate(
+    location = str_split(location, pattern = ", ")
+  )
+  %>% unnest_longer(
+    col = location
+  )
+  %>% group_by(disno)
+  %>% mutate(
+    n_loc_affected = n()
+  )
+  %>% mutate(
+    duration = as.numeric(end_date - start_date) + 1,
+    total_affected = floor(total_affected / (n_loc_affected * duration)),
+  )
+  %>% group_by(disno, disaster_type, location, total_affected)
+  %>% reframe(
+    date = as.Date(start_date:end_date),
+  )
+  %>% mutate(
+    week = cut(date, "week")
+  )
+  %>% group_by(month = cut(date, "month"), location)
+  %>% summarise(
+    total_affected = sum(total_affected),
+    .groups = "drop"
+  )
+  %>% arrange(month)
+)
+```
+
+
+## Disasters - IOM 
+
+
+```{r}
+dis_to_remove <- c(
+  "Transport Related Accidents",
+  "Lightning",
+  "Land Conflicts",
+  "Accident",
+  "Collapsed Structure/Buildings/ Earth.Quarry",
+  "Plane Crash",
+  "Human Epidemics",
+  "Disease",
+  "Cholera",
+  "Other Retrogressive Cultural Practices",
+  "Terrorism",
+  "Boating Accident",
+  "Disease Outbreak (Suspected)",
+  "Public Riots"
+)
+
+df_dis_iom <- (
+  read_excel(
+    file.path(proc_data_dir, "uganda_multihazard_cleaned.xlsx"),
+    sheet = "list_of_events"
+  )
+  %>% rename_with(clean_column_name)
+  %>% mutate(
+    across(where(is.numeric), as.integer)
+  )
+  %>% mutate(
+    reported_date = as.Date(reported_date),
+    date = if_else(
+      is.na(date),
+      reported_date,
+      as.Date(date)
+    )
+  )
+  %>% filter(
+    !(type_of_emergency_disaster %in% dis_to_remove),
+    date >= "2023-01-01"
+  )
+  %>% select(
+    date,
+    disaster = type_of_emergency_disaster,
+    region,
+    subregion,
+    district,
+    affected = affected_people_total,
+    homeless,
+    hospitalised,
+    evacuated,
+    households_affected,
+    households_displaced,
+    crops_affected = have_crops_been_affected,
+    crops_damage = what_is_the_level_of_damage_on_crops,
+    business_affected = has_usual_businesslivelihood_of_people_in_this_area_been_affected,
+    prepositioned_stock = are_there_any_prepositioned_stock_at_the_branch_that_can_facilitate_immediate_response,
+    other_actors = are_other_actors_already_taking_response_actions,
+    worsening_situation = is_the_situation_likely_to_get_better_or_worsen,
+    main_need = what_is_the_most_pressing_need,
+    health,
+    water_supply,
+    sanitation,
+    shelter,
+    food_assistance,
+    nutrition,
+    education,
+    nfi,
+    protection,
+    child_protection,
+    sgbv,
+    livelihood
+  )
+)
+```
+
+```{r}
+df_dis_iom
+```
+
+
+## Food Prices
+
+
+```{r load data food prices}
+# WFP - https://data.humdata.org/dataset/global-wfp-food-prices
+food_prices_files <- list.files(file.path(raw_data_dir, "wfp_food_prices", fsep = "/"))
+list_food_prices <- list()
+for (i in seq(length(food_prices_files))) {
+  list_food_prices[[i]] <- (
+    read_csv(
+      file.path(raw_data_dir, "wfp_food_prices", food_prices_files[i], fsep = "/"),
+      show_col_types = FALSE
+    )
+    %>% filter(
+    # category == "cereals and tubers"
+      pricetype == "Retail",
+      !is.na(latitude),
+      category %in% c("cereals and tubers", "pulses and nuts", "vegetables and fruits")
+    )
+    %>% mutate(
+      admin2 = str_replace(admin2, " Municipality", "")
+    )
+  )
+}
+```
+
+```{r}
+sf_food_prices_wfp_uga <- (
+  bind_rows(list_food_prices)
+  %>% filter(
+    countryiso3 == "UGA"
+  )
+  %>% select(
+    date,
+    admin1,
+    admin2,
+    market,
+    latitude,
+    longitude,
+    category,
+    commodity,
+    unit,
+    price
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    price = as.numeric(price)
+  )
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+)
+```
+
+# Viz
+
+## Disaster locations
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+(
+  sf_uga
+  %>% mutate(
+    region = case_when(
+      adm2_name %in% elgon_region ~ "Elgon",
+      adm2_name %in% karamoja_region ~"Karamoja",
+    )
+  )
+  %>% ggplot()
+  + geom_sf(
+    aes(fill = region)
+  )
+  + scale_fill_manual(
+    values = c("Elgon" = "skyblue", "Karamoja" = "salmon"),
+    na.value = "whitesmoke",
+    na.translate = FALSE
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.position = "top"
+  )
+)
+```
+
+
+## Market locations
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+
+sf_food_prices_wfp_uga_maize_latest <- (
+  sf_food_prices_wfp_uga
+  %>% filter(
+    commodity == "Maize (white)",
+    # date == max(date, na.rm = TRUE)  # filter for latest date
+  )
+  %>% group_by(market)
+  %>% slice(which.max(date))  # select latest date for each market
+)
+(
+  ggplot()
+  + geom_sf(data = sf_uga, color = "black")
+  + geom_sf(
+    data = sf_food_prices_wfp_uga_maize_latest,
+    # mapping = aes(size = usdprice),
+    color = "dodgerblue",
+    size = 5,
+  )
+  + scale_fill_manual(
+    values = c("TRUE" = "salmon", "FALSE" = "whitesmoke")
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "WFP Market Price Data - Uganda",
+    subtitle = "Market location"
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uga_map_market_location.png"),
+  height = 5,
+  width = 5,
+  unit = "in"
+)
+```
+
+# Disaster Analysis
+
+## Karamoja, 2022 Drought 
+
+```{r}
+karamoja_2022_distr <- c(
+  "Napak", 
+  "Kaabong", 
+  "Kotido", 
+  "Moroto"
+)
+
+other_affected_areas <- c(
+  "Mbale",
+  "Kapchorwa",
+  "Sironko",
+  "Bulambuli",
+  "Bukedea",
+  "Bududa",
+  "Butaleja"
+)
+  
+```
+
+
+### Prices
+
+
+```{r}
+sf_food_prices_wfp_karamoja_2022 <- (
+  sf_food_prices_wfp_uga
+  %>% as.data.frame()
+  %>% filter(
+    commodity %in% commodities_to_plot,
+    !(admin2 %in% other_affected_areas),
+    date >= "2021-01-01",
+    date <= "2024-12-31"
+  )
+  %>% mutate(
+    karamoja_region = if_else(
+      admin2 %in% karamoja_2022_distr,
+      "Affected Areas",
+      "Rest of the country"
+    )
+  )
+  %>% mutate(
+    karamoja_region = factor(karamoja_region, c("Rest of the country", "Affected Areas"))
+  )
+  %>% group_by(date, karamoja_region, commodity)
+  %>% summarise(
+    price_q07 = quantile(price, probs = 0.07, na.rm = TRUE),
+    price_q50 = quantile(price, probs = 0.5, na.rm = TRUE),
+    price_q93 = quantile(price, probs = 0.93, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+min_year <- min(year(sf_food_prices_wfp_karamoja_2022$date))
+max_year <- max(year(sf_food_prices_wfp_karamoja_2022$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_prices_wfp_karamoja_2022
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_karamoja_2022[1,],
+    xmin = as.Date("2022-07-01"),
+    xmax = as.Date("2022-12-01"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = karamoja_region),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = karamoja_region, alpha = karamoja_region),
+    size = 2
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_karamoja_2022.png")
+)
+```
+
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_prices_wfp_karamoja_2022
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_karamoja_2022 %>% distinct(commodity),
+    xmin = as.Date("2022-07-01"),
+    xmax = as.Date("2022-12-01"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = karamoja_region),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = karamoja_region, alpha = karamoja_region),
+    size = 2
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_prices_karamoja_2022.png")
+)
+```
+
+### Price differential
+
+```{r}
+sf_food_price_diff_wfp_karamoja_2022 <- (
+  sf_food_prices_wfp_karamoja_2022
+  %>% select(
+    date,
+    karamoja_region,
+    commodity,
+    price_q50
+  )
+  %>% pivot_wider(
+    id_cols = c(date, commodity),
+    names_from = karamoja_region,
+    values_from = price_q50
+  )
+  %>% mutate(
+    price_diff = `Affected Areas` - `Rest of the country`
+  )
+  %>% filter(!is.na(price_diff))
+  %>% select(date, commodity, price_diff)
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_price_diff_wfp_karamoja_2022
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_karamoja_2022[1,],
+    xmin = as.Date("2022-07-01"),
+    xmax = as.Date("2022-12-01"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_diff_karamoja_2022.png")
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_price_diff_wfp_karamoja_2022
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_karamoja_2022 %>% distinct(commodity),
+    xmin = as.Date("2022-07-01"),
+    xmax = as.Date("2022-12-01"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Price diff. comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_price_diff_karamoja_2022.png")
+)
+```
+
+## Elgon
+
+```{r}
+affected_areas <- c(
+  "Mbale",
+  "Kapchorwa",
+  "Sironko",
+  "Bulambuli",
+  "Bukedea",
+  "Bududa",
+  "Butaleja"
+)
+```
+
+```{r}
+df_dis_emdat_elgon <- (
+  df_dis_emdat_by_adm
+  %>% mutate(
+    affected = if_else(
+      location %in% affected_areas,
+      TRUE,
+      FALSE
+    ),
+    date = as.Date(month)
+  )
+  %>% group_by(date, affected)
+  %>% summarise(
+    total_affected = sum(total_affected),
+    .groups = "drop"
+  )
+)
+```
+
+
+### Prices
+
+
+```{r}
+sf_food_prices_wfp_elgon <- (
+  sf_food_prices_wfp_uga
+  %>% as.data.frame()
+  %>% filter(
+    commodity %in% commodities_to_plot,
+    date >= "2018-01-01"
+  )
+  %>% mutate(
+    affected_areas = if_else(
+      admin2 %in% affected_areas,
+      "Affected Areas",
+      "Rest of the country"
+    )
+  )
+  %>% mutate(
+    affected_areas = factor(affected_areas, c("Rest of the country", "Affected Areas"))
+  )
+  %>% group_by(date, affected_areas, commodity)
+  %>% summarise(
+    price_q07 = quantile(price, probs = 0.07, na.rm = TRUE),
+    price_q50 = quantile(price, probs = 0.5, na.rm = TRUE),
+    price_q93 = quantile(price, probs = 0.93, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+min_year <- min(year(sf_food_prices_wfp_elgon$date))
+max_year <- max(year(sf_food_prices_wfp_elgon$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+coeff <- 30
+
+
+(
+  sf_food_prices_wfp_elgon
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_col(
+    data = df_dis_emdat_elgon %>% filter(affected),
+    mapping = aes(x = date, y = total_affected / coeff),
+    width = 20
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = affected_areas),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = affected_areas, alpha = affected_areas),
+    size = 2
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "inside",
+    legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_y_continuous(
+    "Price (UGX/Kg)",
+    sec.axis = sec_axis(trans = ~.*coeff, name = "# Affected")
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_elgon_2022.png")
+)
+```
+
+## Elgon, 2022 Flood
+
+```{r}
+other_affected_areas <- c(
+  "Napak", 
+  "Kaabong", 
+  "Kotido", 
+  "Moroto"
+)
+
+elgon_2022_distr <- c(
+  "Mbale",
+  "Kapchorwa",
+  "Sironko",
+  "Bulambuli",
+  "Bukedea",
+  "Bududa",
+  "Butaleja"
+)
+  
+```
+
+
+### Prices
+
+
+```{r}
+sf_food_prices_wfp_elgon_2022 <- (
+  sf_food_prices_wfp_uga
+  %>% as.data.frame()
+  %>% filter(
+    commodity %in% commodities_to_plot,
+    !(admin2 %in% other_affected_areas),
+    date >= "2021-01-01",
+    date <= "2024-12-31"
+  )
+  %>% mutate(
+    elgon_region = if_else(
+      admin2 %in% elgon_2022_distr,
+      "Affected Areas",
+      "Rest of the country"
+    )
+  )
+  %>% mutate(
+    elgon_region = factor(elgon_region, c("Rest of the country", "Affected Areas"))
+  )
+  %>% group_by(date, elgon_region, commodity)
+  %>% summarise(
+    price_q07 = quantile(price, probs = 0.07, na.rm = TRUE),
+    price_q50 = quantile(price, probs = 0.5, na.rm = TRUE),
+    price_q93 = quantile(price, probs = 0.93, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+min_year <- min(year(sf_food_prices_wfp_elgon_2022$date))
+max_year <- max(year(sf_food_prices_wfp_elgon_2022$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_prices_wfp_elgon_2022
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2022[1,],
+    xmin = as.Date("2022-07-30"),
+    xmax = as.Date("2022-08-05"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = elgon_region),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = elgon_region, alpha = elgon_region),
+    size = 2
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_elgon_2022.png")
+)
+```
+
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_prices_wfp_elgon_2022
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2022 %>% distinct(commodity),
+    xmin = as.Date("2022-07-30"),
+    xmax = as.Date("2022-08-05"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = elgon_region),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = elgon_region, alpha = elgon_region),
+    size = 2
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_prices_elgon_2022.png")
+)
+```
+
+### Price differential
+
+```{r}
+sf_food_price_diff_wfp_elgon_2022 <- (
+  sf_food_prices_wfp_elgon_2022
+  %>% select(
+    date,
+    elgon_region,
+    commodity,
+    price_q50
+  )
+  %>% pivot_wider(
+    id_cols = c(date, commodity),
+    names_from = elgon_region,
+    values_from = price_q50
+  )
+  %>% mutate(
+    price_diff = `Affected Areas` - `Rest of the country`
+  )
+  %>% filter(!is.na(price_diff))
+  %>% select(date, commodity, price_diff)
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_price_diff_wfp_elgon_2022
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2022[1,],
+    xmin = as.Date("2022-07-30"),
+    xmax = as.Date("2022-08-05"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_diff_elgon_2022.png")
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_price_diff_wfp_elgon_2022
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2022 %>% distinct(commodity),
+    xmin = as.Date("2022-07-30"),
+    xmax = as.Date("2022-08-05"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Price diff. comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_price_diff_elgon_2022.png")
+)
+```
+## Elgon, June 2019 Flood
+
+```{r}
+# elgon_2019_distr <- c(
+#   "Bududa",
+#   # "Bushenyi",
+#   # "Rukiga",
+#   "Sironko",
+#   "Mbale",
+#   "Butaleja"
+# )
+
+affected_distr <- c(
+  "Bududa", 
+  "Bukwo",
+  "Bulambuli",
+  "Kapchorwa",
+  "Kween",
+  "Manafwa", 
+  "Mbale", 
+  "Namisindwa",
+  "Sironko", 
+  "Tororo"
+)
+
+other_affected_distr <- c(
+  "Bushenyi",
+  "Rukiga"
+)
+  
+```
+
+```{r}
+(
+  ggplot(sf_uga %>% mutate(affected = if_else(adm2_name %in% affected_distr, TRUE, FALSE)))
+  + geom_sf(
+    aes(fill = affected)
+  )
+  + geom_sf(
+    data = sf_food_prices_wfp_uga_maize_latest,
+    color = "dodgerblue",
+    size = 5,
+  )
+  + scale_fill_manual(
+    values = c("TRUE" = "salmon", "FALSE" = "whitesmoke")
+  )
+  + theme_classic()
+)
+```
+
+### Prices
+
+
+```{r}
+sf_food_prices_wfp_elgon_2019 <- (
+  sf_food_prices_wfp_uga
+  %>% as.data.frame()
+  %>% filter(
+    commodity %in% commodities_to_plot,
+    date >= "2018-01-01",
+    date <= "2021-12-31"
+  )
+  %>% mutate(
+    affected = if_else(
+      admin2 %in% affected_distr,
+      "Affected Areas",
+      "Rest of the country"
+    )
+  )
+  %>% mutate(
+    affected = factor(affected, c("Rest of the country", "Affected Areas"))
+  )
+  %>% group_by(date, affected, commodity)
+  %>% summarise(
+    price_q07 = quantile(price, probs = 0.07, na.rm = TRUE),
+    price_q50 = quantile(price, probs = 0.5, na.rm = TRUE),
+    price_q93 = quantile(price, probs = 0.93, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+min_year <- min(year(sf_food_prices_wfp_elgon_2019$date))
+max_year <- max(year(sf_food_prices_wfp_elgon_2019$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_prices_wfp_elgon_2019
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2019[1,],
+    xmin = as.Date("2019-06-04"),
+    xmax = as.Date("2019-06-08"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = affected),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = affected, alpha = affected),
+    size = 2
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years], "-01-01")))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_elgon_2019.png")
+)
+```
+
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_prices_wfp_elgon_2019
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2019 %>% distinct(commodity),
+    xmin = as.Date("2019-06-04"),
+    xmax = as.Date("2019-06-08"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = affected),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = affected, alpha = affected),
+    size = 2
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years], "-01-01")))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_prices_elgon_2019.png")
+)
+```
+
+### Price differential
+
+```{r}
+sf_food_price_diff_wfp_elgon_2019 <- (
+  sf_food_prices_wfp_elgon_2019
+  %>% select(
+    date,
+    affected,
+    commodity,
+    price_q50
+  )
+  %>% pivot_wider(
+    id_cols = c(date, commodity),
+    names_from = affected,
+    values_from = price_q50
+  )
+  %>% mutate(
+    price_diff = `Affected Areas` - `Rest of the country`
+  )
+  %>% filter(!is.na(price_diff))
+  %>% select(date, commodity, price_diff)
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_price_diff_wfp_elgon_2019
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2019[1,],
+    xmin = as.Date("2019-06-04"),
+    xmax = as.Date("2019-06-08"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years], "-01-01")))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_diff_elgon_2019.png")
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_price_diff_wfp_elgon_2019
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2019 %>% distinct(commodity),
+    xmin = as.Date("2019-06-04"),
+    xmax = as.Date("2019-06-08"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years], "-01-01")))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Price diff. comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_price_diff_elgon_2019.png")
+)
+```
+
+
+## Elgon, April 2024 Flood
+
+```{r}
+affected_distr <- c(
+  "Mbale",
+  "Kapchorwa",
+  "Bulambuli",
+  "Bukedea", 
+  "Butaleja",
+  "Sironko",
+  "Bududa",
+  "Namisindwa"
+)
+
+# other_affected_distr <- c(
+#   "Bushenyi",
+#   "Rukiga"
+# )
+  
+```
+
+```{r}
+(
+  ggplot(sf_uga %>% mutate(affected = if_else(adm2_name %in% affected_distr, TRUE, FALSE)))
+  + geom_sf(
+    aes(fill = affected)
+  )
+  + geom_sf(
+    data = sf_food_prices_wfp_uga_maize_latest,
+    color = "dodgerblue",
+    size = 5,
+  )
+  + scale_fill_manual(
+    values = c("TRUE" = "salmon", "FALSE" = "whitesmoke")
+  )
+  + theme_classic()
+)
+```
+
+### Prices
+
+
+```{r}
+sf_food_prices_wfp_elgon_2024 <- (
+  sf_food_prices_wfp_uga
+  %>% as.data.frame()
+  %>% filter(
+    commodity %in% commodities_to_plot,
+    date >= "2023-01-01"
+  )
+  %>% mutate(
+    affected = if_else(
+      admin2 %in% affected_distr,
+      "Affected Areas",
+      "Rest of the country"
+    )
+  )
+  %>% mutate(
+    affected = factor(affected, c("Rest of the country", "Affected Areas"))
+  )
+  %>% group_by(date, affected, commodity)
+  %>% summarise(
+    price_q07 = quantile(price, probs = 0.07, na.rm = TRUE),
+    price_q50 = quantile(price, probs = 0.5, na.rm = TRUE),
+    price_q93 = quantile(price, probs = 0.93, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+min_year <- min(year(sf_food_prices_wfp_elgon_2024$date))
+max_year <- max(year(sf_food_prices_wfp_elgon_2024$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_prices_wfp_elgon_2024
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2024[1,],
+    xmin = as.Date("2024-04-01"),
+    xmax = as.Date("2024-05-07"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = affected),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = affected, alpha = affected),
+    size = 2
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years] + 1, "-01-01")))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_elgon_2024.png")
+)
+```
+
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_prices_wfp_elgon_2024
+  %>% ggplot()
+  + geom_rect(
+    data = sf_food_prices_wfp_elgon_2024 %>% distinct(commodity),
+    xmin = as.Date("2024-04-01"),
+    xmax = as.Date("2024-05-07"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_ribbon(
+    aes(x = date, ymin = price_q07, ymax = price_q93, fill = affected),
+    alpha = 0.5
+  )
+  + geom_point(
+    aes(x = date, y = price_q50, color = affected, alpha = affected),
+    size = 2
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years] + 1, "-01-01")))
+  )
+  + scale_color_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_fill_manual(
+    values = c("Affected Areas" = "#dc7726", "Rest of the country" = "#97DECE"),
+  )
+  + scale_alpha_manual(
+    values = c("Affected Areas" = 1, "Rest of the country" = 0.8)
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price (UGX/Kg)",
+    subtitle = "Median and 87% interval coverage",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+    fill = guide_legend(override.aes = list(alpha = 1))
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_prices_elgon_2024.png")
+)
+```
+
+### Price differential
+
+```{r}
+sf_food_price_diff_wfp_elgon_2024 <- (
+  sf_food_prices_wfp_elgon_2024
+  %>% select(
+    date,
+    affected,
+    commodity,
+    price_q50
+  )
+  %>% pivot_wider(
+    id_cols = c(date, commodity),
+    names_from = affected,
+    values_from = price_q50
+  )
+  %>% mutate(
+    price_diff = `Affected Areas` - `Rest of the country`
+  )
+  %>% filter(!is.na(price_diff))
+  %>% select(date, commodity, price_diff)
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+(
+  sf_food_price_diff_wfp_elgon_2024
+  %>% filter(commodity == "Maize (white)")
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2024[1,],
+    xmin = as.Date("2024-04-01"),
+    xmax = as.Date("2024-04-07"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years] + 1, "-01-01")))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Maize price comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_maize_price_diff_elgon_2024.png")
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 8
+
+(
+  sf_food_price_diff_wfp_elgon_2024
+  %>% ggplot()
+  + geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + geom_rect(
+    data = sf_food_price_diff_wfp_elgon_2024 %>% distinct(commodity),
+    xmin = as.Date("2024-04-01"),
+    xmax = as.Date("2024-04-07"),
+    ymin = -Inf, 
+    ymax = Inf,
+    fill = "gray",
+    alpha = 0.4
+  )
+  + geom_point(
+    aes(x = date, y = price_diff),
+    size = 2,
+    color = "cornflowerblue"
+  )
+  + facet_wrap(
+    ~commodity,
+    ncol = 1,
+    # strip.position = "right",
+    scales = "free_y"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15, face = "bold"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + scale_x_date(
+      breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+      labels = c(rep(c(""), num_years + 1), rep(years)),
+      limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(years[num_years] + 1, "-01-01")))
+  )
+  + labs(
+    fill = "Location",
+    x = "Date",
+    y = "Price diff. (UGX/Kg)",
+    title = "Price diff. comparison"
+  )
+  + guides(
+    color = "none",
+    alpha = "none",
+  )
+)
+ggsave(
+  filename = file.path(fig_dir, "uganda_all_price_diff_elgon_2024.png")
+)
+```
+
+
+```{r}
+df_dis
+```
+
