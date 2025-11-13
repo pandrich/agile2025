@@ -467,7 +467,7 @@ df_ndvi <- (
 ```{r}
 df_utci <- (
   read_csv(
-    file.path(proc_data_dir, "utci_UGA_adm2.csv"),
+    file.path(proc_data_dir, "utci_UGA.csv"),
     show_col_types = FALSE
   )
   %>% mutate(
@@ -486,6 +486,64 @@ df_spei <- (
   )
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+
+## Crop cycles
+
+```{r}
+df_crops <- (
+  read_csv(
+    file.path(
+      raw_data_dir, 
+      "crop",
+      "harvestStat",
+      "hvstat_africa_data_v1.0.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country %in% c("Uganda"),
+    qc_flag == 0,
+    product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
+    !is.na(production),
+    harvest_year >= 2000
+  )
+  %>% group_by(country, admin_1, harvest_year)
+  %>% slice_max(
+    order_by = production,
+    n = 1,
+    with_ties = FALSE,
+  )
+  %>% ungroup()
+  %>% mutate(
+    planting_date = make_date(year = planting_year, month = planting_month, day = 1),
+    harvest_date = make_date(year = harvest_year, month = harvest_month, day = 1),
+  )
+  %>% rowwise()
+  %>% mutate(
+    date = list(
+      seq(
+        from = planting_date,
+        to = harvest_date,
+        by = "month"
+      )
+    )
+  )
+  %>% unnest(date)
+  %>% ungroup()
+  %>% mutate(
+    date = ceiling_date(date, unit = "month") - days()
+  )
+  %>% select(
+    country,
+    adm1_name = admin_1,
+    date
+  )
+  %>% mutate(
+    crop_season = 1
   )
 )
 ```
@@ -1130,10 +1188,56 @@ df_sgbv <- (
 
 # Data processing
 
-## Combine UTCI, geographies and population
+```{r}
+df_clim_uga_adm1 <- (
+  df_utci_uga
+  %>% merge(
+    sf_uga %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_zmb %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Zambia",
+    adm1_area = unclass(st_area(st_make_valid(geometry))) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+
+## Combine climate, geographies and population
 
 ```{r}
-df_utci_adm2 <- (
+df_clim_adm2 <- (
+  df_uga
+  %>% merge(
+    df_utci,
+    by = "id",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_zwe %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Zimbabwe",
+    adm1_area = unclass(st_area(geometry)) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+
+```{r}
+df_clim_adm2 <- (
   sf_uga
   %>% merge(
     df_utci,

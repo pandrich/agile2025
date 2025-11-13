@@ -150,6 +150,23 @@ sf_zmb <- (
 )
 ```
 
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "ken_adm_iebc_20191031_shp", "ken_admbnda_adm1_iebc_20191031.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = adm1_en,
+    adm1_code = adm1_pcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+
 ## UTCI
 
 There are 10 UTCI thermal stress categories that correspond to specific human physiological responses to the thermal environment. The categories relate to UTCI values as follows: above +46: extreme heat stress; +38 to +46: very strong heat stress; +32 to +38: strong heat stress; +26 to +32: moderate heat stress; +9 to +26: no thermal stress; +9 to 0: slight cold stress; 0 to -13: moderate cold stress; -13 to -27: strong cold stress; -27 to -40: very strong cold stress; below -40: extreme cold stress.
@@ -224,6 +241,22 @@ df_utci_zmb <- (
 )
 ```
 
+
+### Kenya
+
+```{r}
+df_utci_zmb <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_KEN.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+
 ## Crop cycles
 
 ```{r}
@@ -238,7 +271,7 @@ df_crops <- (
     show_col_types = FALSE
   )
   %>% filter(
-    country %in% c("Mozambique", "Zimbabwe", "Lesotho", "Namibia", "Zambia"),
+    country %in% c("Mozambique", "Zimbabwe", "Lesotho", "Namibia", "Zambia", "Kenya"),
     qc_flag == 0,
     product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
     !is.na(production),
@@ -281,7 +314,6 @@ df_crops <- (
 )
 ```
 
-
 ```{r}
 (
   df_crops
@@ -296,7 +328,6 @@ df_crops <- (
   # )
 )
 ```
-
 
 ## SPEI
 
@@ -362,6 +393,20 @@ df_spei_nam <- (
 df_spei_zmb <- (
   read_csv(
     file.path(proc_data_dir, "spei_ZMB.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+### Kenya
+
+```{r}
+df_spei_ken <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_KEN.csv"),
     show_col_types = FALSE
   )
   %>% rename(
@@ -494,11 +539,36 @@ df_clim_zmb_adm1 <- (
 )
 ```
 
+### Kenya
+
+```{r}
+df_clim_ken_adm1 <- (
+  df_utci_ken
+  %>% merge(
+    sf_ken %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_ken %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Kenya",
+    adm1_area = unclass(st_area(st_make_valid(geometry))) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+
 ### Combine
 
 ```{r}
 df_clim_adm1 <- (
-  bind_rows(df_clim_moz_adm1, df_clim_zwe_adm1, df_clim_lso_adm1, df_clim_nam_adm1, df_clim_zmb_adm1)
+  bind_rows(df_clim_moz_adm1, df_clim_zwe_adm1, df_clim_lso_adm1, df_clim_nam_adm1, df_clim_zmb_adm1, df_clim_ken_adm1)
   %>% merge(
     df_crops,
     by = c("country", "adm1_name", "date"),
@@ -619,7 +689,6 @@ df_clim_adm1_roll <- (
 )
 ```
 
-
 ## Calculate deviations from average
 
 ```{r}
@@ -646,7 +715,6 @@ df_clim_adm1_roll_dev <- (
 )
 ```
 
-
 ```{r}
 colSums(is.na(df_clim_adm1_roll_dev))
 ```
@@ -657,7 +725,6 @@ colSums(is.na(df_clim_adm1_roll_dev))
   %>% filter(is.na(dev_value_spei_above_85q_sum_12m))
 )
 ```
-
 
 # Visualizations
 
@@ -774,7 +841,6 @@ ggsave(
   height = 5
 )
 ```
-
 
 ```{r}
 #| fig-width: 9
@@ -935,7 +1001,6 @@ ggsave(
   height = 5
 )
 ```
-
 
 ```{r}
 #| fig-width: 9

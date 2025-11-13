@@ -823,7 +823,7 @@ utci_zmb <- build_utci_ts_country("ZMB", rast_pop_zmb_2022, adm1_pop_zmb_2022, s
 utci_uga <- build_utci_ts_country("UGA", rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
 ```
 
-### Uganda
+### Kenya
 
 ```{r}
 utci_ken <- build_utci_ts_country("KEN", rast_pop_ken_2022, adm_pop_ken_2022, sf_ken)

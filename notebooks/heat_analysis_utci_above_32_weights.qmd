@@ -98,7 +98,6 @@ bin_cov_ch <- c(
 cont_covs <- c("log_pop_density", "clim")
 ```
 
-
 # Functions
 
 ```{r}
@@ -395,7 +394,6 @@ plot_continuous_marginal <- function(df_summary, covar_label = NULL, lims = NULL
 }
 ```
 
-
 # Import Data
 
 ```{r}
@@ -417,7 +415,6 @@ df_clim_viol <- (
   )
 )
 ```
-
 
 # Prepare Data
 
@@ -442,13 +439,11 @@ df_model_ch <- (
 )
 ```
 
-
 # Modeling
 
 ## All Female
 
 ### Any violence
-
 
 ```{r}
 form_fem_all_viol <- bf(
@@ -484,14 +479,11 @@ fit_fem_all_viol <- brm(
 pp_check(fit_fem_all_viol)
 ```
 
-
-
 #### Model Output
 
 ```{r}
 fit_fem_all_viol
 ```
-
 
 #### Posterior Predictive Checks
 
@@ -535,9 +527,6 @@ ggsave(
 df_marg_cont_fem_all_viol <- generate_marginal_df(fit_fem_all_viol, df_model_fem, cont_covs)
 ```
 
-
-
-
 ```{r}
 #| fig-width: 7
 #| fig-height: 3
@@ -560,10 +549,7 @@ ggsave(
 )
 ```
 
-
-
 ### Non-partner violence
-
 
 ```{r}
 form_fem_np_viol <- bf(
@@ -594,21 +580,17 @@ fit_fem_np_viol <- brm(
 )
 ```
 
-
 #### Prior Predictive
 
 ```{r}
 pp_check(fit_fem_np_viol)
 ```
 
-
-
 #### Model Output
 
 ```{r}
 fit_fem_np_viol
 ```
-
 
 #### Posterior Predictive Checks
 
@@ -636,7 +618,6 @@ ggsave(
 df_marg_cont_fem_np_viol <- generate_marginal_df(fit_fem_np_viol, df_model_fem, cont_covs)
 ```
 
-
 ```{r}
 #| fig-width: 7
 #| fig-height: 3
@@ -659,11 +640,9 @@ ggsave(
 )
 ```
 
-
 ## Children
 
 ### Any violence
-
 
 ```{r}
 form_ch_all_viol <- bf(
@@ -700,14 +679,11 @@ fit_ch_all_viol <- brm(
 pp_check(fit_ch_all_viol)
 ```
 
-
-
 #### Model Output
 
 ```{r}
 fit_ch_all_viol
 ```
-
 
 #### Posterior Predictive Checks
 
@@ -731,11 +707,9 @@ ggsave(
 
 ##### Marginal Effect of Continuous Variables
 
-
 ```{r}
 df_marg_cont_ch_all_viol <- generate_marginal_df(fit_ch_all_viol, df_model_ch, cont_covs)
 ```
-
 
 ```{r}
 #| fig-width: 7
@@ -759,10 +733,7 @@ ggsave(
 )
 ```
 
-
-
 ### Non-partner violence
-
 
 ```{r}
 form_ch_np_viol <- bf(
@@ -793,21 +764,17 @@ fit_ch_np_viol <- brm(
 )
 ```
 
-
 #### Prior Predictive
 
 ```{r}
 pp_check(fit_ch_np_viol)
 ```
 
-
-
 #### Model Output
 
 ```{r}
 fit_ch_np_viol
 ```
-
 
 #### Posterior Predictive Checks
 
@@ -835,7 +802,6 @@ ggsave(
 df_marg_cont_ch_np_viol <- generate_marginal_df(fit_ch_np_viol, df_model_ch, cont_covs)
 ```
 
-
 ```{r}
 #| fig-width: 7
 #| fig-height: 3
@@ -857,5 +823,3 @@ ggsave(
   filename = "marginal_predicted_prob_climate_ur_ch_np_viol.png"
 )
 ```
-
-
