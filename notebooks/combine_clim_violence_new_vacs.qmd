@@ -1,0 +1,124 @@
+---
+title: "Combine Climate and Violence Data - New VACS"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+
+# Settings
+nb_name <-  "Build climate-violence dataset - new"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+
+# Import data
+
+## Climate
+
+```{r}
+df_clim <- (
+  read_csv(
+    file.path(proc_data_dir, "processed_utci_spei.csv"),
+    show_col_types = FALSE
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "vacs_clean_2025-11-06.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    # female == 1,
+    # age <=17
+    !is.na(date),
+  )
+  %>% select(
+    -c(adm1_name, adm2_code, adm2_name)
+  )
+  %>% mutate(
+    date = ceiling_date(as.Date(date, format = "%Y-%m-%d"), "month") - days(1)
+  )
+)
+```
+
+
+# Combine datasets
+
+```{r}
+(
+  df_clim
+  %>% filter(
+    country == "Zambia"
+  )
+  %>% distinct(adm1_code, adm1_name)
+  %>% arrange(adm1_code)
+)
+```
+
+```{r}
+# (
+#   df_viol
+#   %>% filter(
+#     country == "Zambia"
+#   )
+#   %>% distinct(adm1_code, adm1_name)
+#   %>% arrange(adm1_code)
+# )
+```
+
+
+```{r}
+df_clim_viol <- (
+  df_viol
+  %>% merge(
+    df_clim,
+    by = c(
+      "country", 
+      "adm1_code",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  # %>% select(-adm1_code)
+)
+```
+
+```{r}
+(
+  df_clim_viol
+  %>% filter(is.na(dev_value_spei_above_85q_sum_12m))
+)
+```
+
+
+```{r}
+df_clim_viol %>% write_csv(file.path(proc_data_dir, "climate_violence_new_vacs.csv"))
+```
+
+
+
+
+

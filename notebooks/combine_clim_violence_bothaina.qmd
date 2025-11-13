@@ -1,0 +1,153 @@
+---
+title: "Combine Climate and Violence Data - Bothaina"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(patchwork)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+
+# Settings
+nb_name <-  "Build climate-violence dataset"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+# Data Import
+
+## Climate
+
+```{r}
+df_clim <- (
+  read_csv(
+    file.path(proc_data_dir, "processed_utci_spei.csv"),
+    show_col_types = FALSE
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol <- (
+  haven::read_dta(
+    file.path(proc_data_dir, "merged_df_south_three_drought.dta")
+  )
+  %>% rename_with(tolower)
+  %>% filter(
+    country != "Kenya"
+  )
+  %>% mutate(
+    sex = as.numeric(sex) - 1,
+    hhsex = hhsex - 1,
+    date = ceiling_date(as.Date(paste0(year, "-", month, "-", "01")), "month") - days(1),
+    rural = as.numeric(rural_urban) - 1,
+    region = case_when(
+    region == "Mash Central" ~ "Mashonaland Central",
+    region == "Mash East" ~ "Mashonaland East",
+    region == "Mash West" ~ "Mashonaland West",
+    region == "Mat North" ~ "Matabeleland North",
+    region == "Mat South" ~ "Matabeleland South",
+    .default = region
+   )
+  )
+%>% select(
+  country,
+  cluster,
+  adm1_name = region,
+  age = q2,
+  sample_weight = sampleweight,
+  date,
+  rural,
+  orphan,
+  married,
+  child_mar = childmar,
+  food_insec,
+  no_education = educationever,
+  school_enrol,
+  poor,
+  vpoor,
+  sv_ipv_12m,
+  pv_ipv_12m,
+  sv_any_12m = sv_any,
+  sv_np_12m = any_sv_12m,     # non-partner perpetrators
+  pv_child_12m = child_pv_12m,
+)
+  %>% filter(!is.na(date))
+)
+```
+
+```{r}
+# df_viol_2 <- (
+#   read_csv(
+#     file.path(proc_data_dir, "vacsheat_janina.csv"),
+#     show_col_types = FALSE
+#   )
+#   %>% rename_with(tolower)
+#   %>% filter(
+#     country != "Kenya"
+#   )
+#   %>% mutate(
+#     sex = sex - 1,
+#     hhsex = hhsex - 1,
+#     date = ceiling_date(as.Date(paste0(year, "-", month, "-", "01")), "month") - days(1),
+#     rural = if_else(rural_urban == "Rural", 1, 0),
+#   )
+#   %>% select(
+#     country,
+#     cluster,
+#     adm1_name = region,
+#     age,
+#     sample_weight = sampleweight,
+#     date,
+#     rural,
+#     orphan,
+#     married,
+#     food_insec,
+#     no_education = educationever,
+#     school_enrol,
+#     sv_ipv_12m,
+#     pv_ipv_12m,
+#     sv_any_12m = any_sv_12m,
+#     pv_child_12m = child_pv_12m,
+#   )
+#   %>% filter(!is.na(date))
+# )
+```
+
+# Combine datasets
+
+```{r}
+df_clim_viol <- (
+  df_viol
+  %>% merge(
+    (
+      df_clim_adm1_roll_dev
+      %>% select(country, adm1_name, log_pop_density, date, contains("12m"))
+    ),
+    by = c(
+      "country", 
+      "adm1_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+df_clim_viol %>% write_csv(file.path(proc_data_dir, "climate_violence_bothaina.csv"))
+```
