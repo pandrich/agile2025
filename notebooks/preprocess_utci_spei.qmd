@@ -1,0 +1,995 @@
+---
+title: "Test Weighted UTCI"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(patchwork)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+
+# Settings
+nb_name <-  "Build climate-violence dataset - new"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+# Viz Settings
+
+```{r}
+feature_map <- c(
+  "log_pop_density" = "Pop. Density (log)",
+  "in_school" = "Enrolled in school",
+  "work" = "Worked",
+  "rural" = "Rural Area",
+  "value_utci_days_above_26_daily_max_sum_12m" = "UTCI days max above 26",
+  "value_utci_days_above_26_daily_min_sum_12m" = "UTCI days min above 26",
+  "value_utci_days_above_32_daily_min_sum_12m" = "UTCI days min above 32",
+  "value_utci_days_above_32_daily_max_sum_12m" = "UTCI days max above 32",
+  "value_utci_days_above_38_daily_max_sum_12m" = "UTCI days max above 38",
+  "value_utci_days_below_0_daily_min_sum_12m" = "UTCI days min below 0",
+  "value_utci_days_below_9_daily_max_sum_12m" = "UTCI days max below 9",
+  "value_utci_days_below_9_daily_min_sum_12m" = "UTCI days min below 9",
+  "value_utci_monthly_max_max_12m" = "Max UTCI high",
+  "value_utci_monthly_max_mean_12m" = "Mean UTCI high",
+  "value_utci_monthly_min_max_12m" = "Max UTCI low",
+  "value_spei_mean_12m" = "Mean SPEI",
+  "value_spei_max_12m" = "Max SPEI",
+  "value_spei_below_15q_sum_12m" = "SPEI months below 15th quantile",
+  "value_spei_above_85q_sum_12m" = "SPEI months above 85th quantile",
+  "dev_value_utci_days_above_26_daily_max_sum_12m" = "UTCI days max above 26\n(dev from mean)",
+  "dev_value_utci_days_above_26_daily_min_sum_12m" = "UTCI days min above 26\n(dev from mean)",
+  "dev_value_utci_days_above_32_daily_max_sum_12m" = "UTCI days max above 32\n(dev from mean)",
+  "dev_value_utci_days_above_38_daily_max_sum_12m" = "UTCI days max above 38\n(dev from mean)",
+  "dev_value_utci_days_below_0_daily_min_sum_12m" = "UTCI days min below 0\n(dev from mean)",
+  "dev_value_utci_days_below_9_daily_max_sum_12m" = "UTCI days max below 9\n(dev from mean)",
+  "dev_value_utci_days_below_9_daily_min_sum_12m" = "UTCI days min below 9\n(dev from mean)",
+  "dev_value_utci_monthly_max_max_12m" = "Max UTCI high\n(dev from mean)",
+  "dev_value_utci_monthly_max_mean_12m" = "Mean UTCI high\n(dev from mean)",
+  "dev_value_utci_monthly_min_max_12m" = "Max UTCI low\n(dev from mean)",
+  "dev_value_spei_mean_12m" = "Mean SPEI\n(dev from mean)",
+  "dev_value_spei_max_12m" = "Max SPEI\n(dev from mean)",
+  "dev_value_spei_below_15q_sum_12m" = "SPEI days below 15th quantile\n(dev from mean)",
+  "dev_value_spei_above_85q_sum_12m" = "SPEI days above 85th quantile\n(dev from mean)"
+)
+```
+
+# Data Import
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+## UTCI
+
+There are 10 UTCI thermal stress categories that correspond to specific human physiological responses to the thermal environment. The categories relate to UTCI values as follows: above +46: extreme heat stress; +38 to +46: very strong heat stress; +32 to +38: strong heat stress; +26 to +32: moderate heat stress; +9 to +26: no thermal stress; +9 to 0: slight cold stress; 0 to -13: moderate cold stress; -13 to -27: strong cold stress; -27 to -40: very strong cold stress; below -40: extreme cold stress.
+
+### Mozambique
+
+```{r}
+df_utci_moz <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_MOZ.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+df_utci_zwe <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_ZWE.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+df_utci_lso <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_LSO.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+### Namibia
+
+```{r}
+df_utci_nam <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_NAM.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+### Zambia
+
+```{r}
+df_utci_zmb <- (
+  read_csv(
+    file.path(proc_data_dir, "utci_ZMB.csv"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = ceiling_date(date, "month") - days(1)
+  )
+)
+```
+
+## Crop cycles
+
+```{r}
+df_crops <- (
+  read_csv(
+    file.path(
+      raw_data_dir, 
+      "crop",
+      "harvestStat",
+      "hvstat_africa_data_v1.0.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country %in% c("Mozambique", "Zimbabwe", "Lesotho", "Namibia", "Zambia"),
+    qc_flag == 0,
+    product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
+    !is.na(production),
+    harvest_year >= 2000
+  )
+  %>% group_by(country, admin_1, harvest_year)
+  %>% slice_max(
+    order_by = production,
+    n = 1,
+    with_ties = FALSE,
+  )
+  %>% ungroup()
+  %>% mutate(
+    planting_date = make_date(year = planting_year, month = planting_month, day = 1),
+    harvest_date = make_date(year = harvest_year, month = harvest_month, day = 1),
+  )
+  %>% rowwise()
+  %>% mutate(
+    date = list(
+      seq(
+        from = planting_date,
+        to = harvest_date,
+        by = "month"
+      )
+    )
+  )
+  %>% unnest(date)
+  %>% ungroup()
+  %>% mutate(
+    date = ceiling_date(date, unit = "month") - days()
+  )
+  %>% select(
+    country,
+    adm1_name = admin_1,
+    date
+  )
+  %>% mutate(
+    crop_season = 1
+  )
+)
+```
+
+
+```{r}
+(
+  df_crops
+  %>% group_by(country)
+  %>% summarise(
+    max_date = max(date),
+    min_date = min(date)
+  )
+  # %>% filter(
+  #   country == "Mozambique",
+  #   date == "2019-07-31"
+  # )
+)
+```
+
+
+## SPEI
+
+### Mozambique
+
+```{r}
+df_spei_moz <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_MOZ.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+df_spei_zwe <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_ZWE.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+df_spei_lso <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_LSO.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+### Namibia
+
+```{r}
+df_spei_nam <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_NAM.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+### Zambia
+
+```{r}
+df_spei_zmb <- (
+  read_csv(
+    file.path(proc_data_dir, "spei_ZMB.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    adm1_code = id
+  )
+)
+```
+
+# Process Data
+
+## Combine UTCI, SPEI and Geography
+
+### Mozambique
+
+```{r}
+df_clim_moz_adm1 <- (
+  df_utci_moz
+  %>% merge(
+    sf_moz %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_moz %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Mozambique",
+    adm1_area = unclass(st_area(geometry)) / 1E6, #km^2
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+df_clim_zwe_adm1 <- (
+  df_utci_zwe
+  %>% merge(
+    sf_zwe %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_zwe %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Zimbabwe",
+    adm1_area = unclass(st_area(geometry)) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+df_clim_lso_adm1 <- (
+  df_utci_lso
+  %>% merge(
+    sf_lso %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_lso %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Lesotho",
+    adm1_area = unclass(st_area(st_make_valid(geometry))) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+### Namibia
+
+```{r}
+df_clim_nam_adm1 <- (
+  df_utci_nam
+  %>% merge(
+    sf_nam %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_nam %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Namibia",
+    adm1_area = unclass(st_area(geometry)) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+### Zambia
+
+```{r}
+df_clim_zmb_adm1 <- (
+  df_utci_zmb
+  %>% merge(
+    sf_zmb %>% select(adm1_code, adm1_name),
+    by = "adm1_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_zmb %>% select(-pop),
+    by = c("adm1_code", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = "Zambia",
+    adm1_area = unclass(st_area(st_make_valid(geometry))) / 1E6,
+    pop_density = pop / adm1_area,
+    log_pop_density = log10(pop_density)
+  )
+)
+```
+
+### Combine
+
+```{r}
+df_clim_adm1 <- (
+  bind_rows(df_clim_moz_adm1, df_clim_zwe_adm1, df_clim_lso_adm1, df_clim_nam_adm1, df_clim_zmb_adm1)
+  %>% merge(
+    df_crops,
+    by = c("country", "adm1_name", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    crop_season = if_else(is.na(crop_season), 0, 1),
+    adm1_name = case_when(
+      adm1_name == "Zambézia" ~ "Zambezia",
+      adm1_name == "Maputo Provincia" ~ "Maputo",
+      adm1_name == "Cidade de Maputo" ~ "Maputo City",
+      adm1_name == "Harare Chitungwiza" ~ "Harare",
+      adm1_name == "//Karas" ~ "!Karas",
+      .default = adm1_name
+    ),
+  )
+  %>% group_by(country, adm1_name, adm1_code)
+  %>% mutate(
+    dist_from_last_crop_season = {
+      ones_pos <- which(crop_season == 1L)
+      vapply(
+        seq_along(crop_season),
+        function(i) {
+          if (crop_season[i] == 1L) return (0L)
+          prev <- ones_pos[ones_pos < i]
+          if (length(prev) == 0L) return (NA_integer_)
+          i - max(prev)
+        },
+        integer(1)
+      )
+    }
+  )
+  %>% ungroup()
+  %>% select(
+    country,
+    adm1_code,
+    adm1_name,
+    log_pop_density,
+    date,
+    utci_monthly_max,
+    utci_days_above_32_daily_min,
+    utci_days_above_32_daily_max,
+    spei,
+    crop_season,
+    dist_from_last_crop_season
+  )
+  %>% arrange(country, adm1_name, date)
+)
+```
+
+## Calculate Stats in previous year
+
+```{r}
+df_clim_adm1_roll <- (
+  df_clim_adm1
+  %>% mutate(
+    spei_crop = spei * crop_season
+  )
+  %>% group_by(country, adm1_code, adm1_name, log_pop_density)
+  %>% mutate(
+    across(
+      -c(date, crop_season, dist_from_last_crop_season, utci_monthly_max, spei, spei_crop),
+      ~ zoo::rollsum((.), 12, fill = NA, align = "right"),
+      .names = "{.col}_sum_12m"
+    ),
+    utci_monthly_max_mean_12m = zoo::rollmean(utci_monthly_max, 12, fill = NA, align = "right"),
+    utci_monthly_max_max_12m = zoo::rollmax(utci_monthly_max, 12, fill = NA, align = "right"),
+    spei_crop_sum_temp = zoo::rollsum(spei_crop, 12, fill = NA, align = "right"),
+    spei_mean_12m = zoo::rollmean(spei, 12, fill = NA, align = "right"),
+    spei_max_12m = zoo::rollmax(spei, 12, fill = NA, align = "right"),
+    spei_crop_max_12m = zoo::rollmax(spei_crop, 12, fill = NA, align = "right"),
+    spei_min_12m = zoo::rollapply(spei, 12, min, fill = NA, align = "right"),
+    spei_crop_min_12m = zoo::rollapply(spei_crop, 12, min, fill = NA, align = "right"),
+    spei_below_15q = if_else(
+      spei < quantile(spei, 0.15),
+      1,
+      0
+    ),
+    spei_crop_below_15q = if_else(
+      (spei_crop < quantile(spei_crop[crop_season == 1], 0.15)) & (crop_season == 1),
+      1,
+      0
+    ),
+    spei_above_85q = if_else(
+      spei > quantile(spei, 0.85),
+      1,
+      0
+    ),
+    spei_crop_above_85q = if_else(
+      (spei_crop > quantile(spei_crop[crop_season == 1], 0.85)) & (crop_season == 1),
+      1,
+      0
+    ),
+    spei_below_15q_sum_12m = zoo::rollsum(spei_below_15q, 12, fill = NA, align = "right"),
+    spei_crop_below_15q_sum_12m = zoo::rollsum(spei_crop_below_15q, 12, fill = NA, align = "right"),
+    spei_above_85q_sum_12m = zoo::rollsum(spei_above_85q, 12, fill = NA, align = "right"),
+    spei_crop_above_85q_sum_12m = zoo::rollsum(spei_crop_above_85q, 12, fill = NA, align = "right"),
+    n_crop_months = zoo::rollsum(crop_season, 12, fill = NA, align = "right")
+  )
+  %>% ungroup()
+  %>% mutate(
+    spei_crop_mean_12m = if_else(
+      n_crop_months == 0, 
+      0,
+      spei_crop_sum_temp / n_crop_months
+    )
+  )
+  %>% filter(!is.na(spei_mean_12m))
+  %>% select(country, adm1_code, adm1_name, log_pop_density, date, crop_season, n_crop_months, spei_crop_sum_temp, dist_from_last_crop_season, contains("12m"))
+)
+```
+
+```{r}
+(
+  df_clim_adm1_roll
+  # %>% filter(is.na(spei_crop_sum_temp))
+  %>% filter(spei_crop_sum_temp == 0)
+)
+```
+
+
+## Calculate deviations from average
+
+```{r}
+df_clim_adm1_roll_dev <- (
+  df_clim_adm1_roll
+  %>% pivot_longer(
+    cols = -c(country, adm1_code, adm1_name, log_pop_density, date, dist_from_last_crop_season),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(country, adm1_code, adm1_name, log_pop_density, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = (value - mean_value) #/ mean_value
+  )
+  %>% pivot_wider(
+    id_cols = c(country, adm1_code, adm1_name, log_pop_density, date, dist_from_last_crop_season),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+
+```{r}
+colSums(is.na(df_clim_adm1_roll_dev))
+```
+
+```{r}
+(
+  df_clim_adm1_roll_dev
+  %>% filter(is.na(dev_value_spei_above_85q_sum_12m))
+)
+```
+
+
+# Visualizations
+
+#### UTCI
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm1_name,
+    utci_days_above_32_daily_max,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = utci_days_above_32_daily_max)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days UTCI max > 32 (month)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_max_above_32_month_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1_roll
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm1_name,
+    utci_days_above_32_daily_max_sum_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = utci_days_above_32_daily_max_sum_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days UTCI max > 32 (year)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_max_above_32_year_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1_roll_dev
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm1_name,
+    dev_value_utci_days_above_32_daily_max_sum_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_utci_days_above_32_daily_max_sum_12m)
+  )
+  + geom_line(
+    color = "#ecc046",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days UTCI max > 32 (dev. from mean year)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "dev_utci_max_above_32_year_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+#### SPEI
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1_roll
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = spei_crop_max_12m)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "SPEI"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1_roll
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = spei_crop_above_85q_sum_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "SPEI (year)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_above_85q_sum_12m_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_adm1_roll_dev
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm1_name %in% c("Tete", "Zambezia"))
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_spei_crop_above_85q_sum_12m)
+  )
+  + geom_line(
+    color = "#ecc046",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm1_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# months SPEI above 85th quantile (dev. from mean year)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "dev_value_spei_above_85q_sum_12m_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+# Save data
+
+```{r}
+df_clim_adm1_roll_dev %>% write_csv(file.path(proc_data_dir, "processed_utci_spei.csv"))
+```

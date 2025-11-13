@@ -117,7 +117,6 @@ sf_fewsnet_moz <- (
 
 ## Population - https://fdw.fews.net/api/cropproductionfacts/?format=csv&cpcv2=R01122AC&indicator=crop:quantity&indicator=crop:yield&indicator=crop:planted&indicator=crop:harvested&country_code=MZ&fields=simple
 
-
 ```{r}
 df_population_moz <- (
   read_csv(
@@ -144,12 +143,9 @@ df_population_moz <- (
 df_population_moz
 ```
 
-
-
 ## DIEM - https://data.humdata.org/dataset/fao-diem-monitoring-system-household-surveys-aggregated-data
 
 https://data-in-emergencies.fao.org/search?q=income
-
 
 ```{r load data diem}
 
@@ -206,9 +202,7 @@ df_diem_fs_moz_arc <- (
 )
 ```
 
- 
 ## Food Prices
-
 
 ```{r load data food prices}
 # WFP - https://data.humdata.org/dataset/global-wfp-food-prices
@@ -254,7 +248,6 @@ df_food_prices_fewsnet_moz_maize <- (
 )
 ```
 
-
 ## Crop yield and production - https://datadryad.org/dataset/doi:10.5061/dryad.vq83bk42w
 
 ```{r load data crop yield}
@@ -269,7 +262,6 @@ df_maize_yield_prod <- (
   )
 )
 ```
-
 
 ## Uganda Violence
 
@@ -310,7 +302,6 @@ df_viol_uga <- (
 )
 ```
 
-
 ## Uganda Droughts
 
 ```{r}
@@ -328,9 +319,7 @@ df_drought_uga <- (
 )
 ```
 
-
 ## Uganda Disasters - EM-DAT
-
 
 ```{r}
 disaster_list <- c(
@@ -402,7 +391,6 @@ df_emdat_uga <- (
 head(df_emdat_uga)
 ```
 
-
 ## Meta
 
 ### Movements - https://partners.facebook.com/data_for_good/data/640679780696161/about/?partner_id=307300860780730
@@ -470,7 +458,6 @@ df_fb_mov <- (
 )
 ```
 
-
 ### Business Activity - https://partners.facebook.com/data_for_good/data/640679780696161/about/?partner_id=307300860780730
 
 ```{r}
@@ -527,13 +514,9 @@ df_fb_bus_gadm1 <- (
 )
 ```
 
-
-
-
 # Data Processing
 
 ## DIEM
-
 
 ```{r}
 
@@ -812,7 +795,6 @@ sf_maize_yield_prod_moz <- (
   )
 )
 ```
-
 
 # Plots
 
@@ -1167,9 +1149,6 @@ ggsave(
 )
 ```
 
-
-
-
 ### Food Prices - WFP
 
 ```{r}
@@ -1189,8 +1168,6 @@ ggsave(
 ```
 
 #### Map
-
-
 
 ```{r}
 sf_food_prices_wfp_moz_maize_latest <- (
@@ -1237,7 +1214,6 @@ sf_food_prices_wfp_moz_maize_latest <- (
 ```
 
 #### By market (markets with most reports)
-
 
 ```{r}
 #| fig-width: 9
@@ -1402,8 +1378,6 @@ num_years <- length(years)
 
 #### Map
 
-
-
 ```{r}
 sf_food_prices_fewsnet_moz_maize_latest <- (
   sf_food_prices_fewsnet_moz_maize
@@ -1444,7 +1418,6 @@ sf_food_prices_fewsnet_moz_maize_latest <- (
 ```
 
 #### By market (sample markets)
-
 
 ```{r}
 #| fig-width: 9
@@ -1601,7 +1574,6 @@ ggsave(
 
 ### Crop Yields
 
-
 ```{r}
 #| fig-width: 9
 #| fig-height: 9
@@ -1686,7 +1658,6 @@ num_years <- length(years)
 ```{r}
 df_maize_yield_prod
 ```
-
 
 ### Maize Yield and Price over time
 
@@ -2245,7 +2216,6 @@ ggsave(
 )
 ```
 
-
 ```{r}
 (
   sf_maize_prices_wfp_uga_regions
@@ -2256,7 +2226,7 @@ ggsave(
 )
 ```
 
-##### Karamoja, 2022 Drough 
+##### Karamoja, 2022 Drough
 
 ```{r}
 (
@@ -2274,7 +2244,6 @@ ggsave(
   )
 )
 ```
-
 
 ```{r}
 #| fig-width: 8
@@ -2689,13 +2658,11 @@ ggsave(
 )
 ```
 
-
 ### Disasters
 
 ```{r}
 df_alldis_uga
 ```
-
 
 ```{r}
 #| fig-width: 5
@@ -2812,7 +2779,6 @@ clean_admins <- function(col) {
 }
 ```
 
-
 ```{r}
 df_uga_important_disasters <- (
   df_emdat_uga
@@ -2846,9 +2812,6 @@ df_uga_important_disasters <- (
 ```{r}
 write_csv(df_uga_important_disasters, file = file.path(proc_data_dir, "uganda_relevant_disasters_2010_2025.csv"))
 ```
-
-
-
 
 ### Movement Distribution
 
@@ -2886,7 +2849,6 @@ p3 <- (
   )
 )
 ```
-
 
 ### Business Activity
 
@@ -3006,4 +2968,12 @@ p2 <- (
     axes = "collect"
   )
 )
+```
+
+```{r}
+df_both <- haven::read_dta(file.path(proc_data_dir, "merged_df_south_three_drought.dta"))
+```
+
+```{r}
+df_both
 ```

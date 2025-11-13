@@ -1,0 +1,225 @@
+---
+title: "MICS Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+
+# Data Import
+
+## MICS
+
+### Eswatini
+
+```{r}
+mics_esw <- (
+  haven::read_sav(
+    file.path(
+      raw_data_dir,
+      "MICS",
+      "Eswatini MICS6 Datasets/Eswatini MICS6 SPSS Datasets/wm.sav"
+      # "Zimbabwe MICS6 SPSS Datasets/Zimbabwe MICS6 SPSS Datasets/wm.sav"
+    )
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    ever_school = if_else(wb5 == 1, 1, 0),
+    school_this_year = if_else(wb9 == 1, 1, 0),
+    mobile = if_else(mt11 == 1, 1, 0),
+    given_birth = if_else(cm1 == 1, 1, 0),
+    violence_justified = as.integer(
+      rowSums(across(c(dv1a, dv1b, dv1c, dv1d, dv1e, dv1f, dv1g, dv1h, dv1i), ~ .x == 1), na.rm = TRUE) > 0
+    ),
+    physically_attacked_12m = if_else(vt10 == 1, 1, 0),
+    discriminated = as.integer(
+      rowSums(across(c(vt22a, vt22b, vt22c, vt22d, vt22e, vt22f, vt22x), ~ .x == 1), na.rm = TRUE) > 0
+    ),
+    living_with_partner = if_else(ma1 %in% c(1, 2), 1, 0),
+    polygamous_partner = if_else(ma3 == 1, 1, 0),
+    can_refuse_sex = if_else(sb14 == 1, 1, 0),
+    partner_gbv_12m = if_else(gv6 %in% c(1, 2), 1, 0),
+    non_partner_gbv_12m = if_else(gv12 == 1, 1, 0),
+    all_gbv_12m = as.integer(
+      rowSums(across(c(partner_gbv_12m, non_partner_gbv_12m), ~ .x == 1), na.rm = TRUE) > 0
+    )
+  )
+  %>% select(
+    cluster = wm1,
+    stratum,
+    age = wb4,
+    ever_school,
+    school_this_year,
+    violence_justified,
+    physically_attacked_12m,
+    discriminated,
+    living_with_partner,
+    polygamous_partner,
+    can_refuse_sex,
+    partner_gbv_12m,
+    non_partner_gbv_12m,
+    all_gbv_12m
+  )
+)
+      
+```
+
+```{r}
+mics_esw
+```
+
+
+## Covariates
+
+```{r}
+cov_esw <- (
+  readxl::read_xlsx(
+    file.path(
+      raw_data_dir,
+      "MICS",
+      "EswatiniMICS2021-22GeoCov_0",
+      "EswatiniMICS2021-22GeoCov.xlsx"
+    ),
+    sheet = "Data - Cluster"
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    cluster,
+    aridity_2021,
+    drought_episodes,
+    maximum_temperature_2021,
+    mean_temperature_2021,
+    precipitation_2021,
+    malaria_prevalence_2021,
+    travel_times,
+    degurba_2020,
+    walking_only_travel_time_to_healthcare_2019,
+    all_population_count_2021,
+    u18_population_2021
+  )
+)
+```
+
+```{r}
+df_esw <- (
+  mics_esw
+  %>% merge(
+    cov_esw,
+    by = "cluster",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+df_esw
+```
+
+# Analysis
+
+```{r}
+df_esw_cluster <- (
+  df_esw
+  %>% group_by(cluster)
+  %>% summarise(
+    across(everything(), ~ mean(., na.rm = TRUE))
+  )
+  %>% replace(is.na(.), 0)
+)
+```
+
+# Visualizations
+
+```{r}
+df_esw_viz <- (
+  df_esw_cluster
+  %>% select(-c(partner_gbv_12m, non_partner_gbv_12m))
+  %>% pivot_longer(
+    cols = -c(cluster, all_gbv_12m),
+    names_to = "variable",
+    values_to = "value"
+  )
+)
+```
+
+```{r}
+#| fig-width: 11
+#| fig-height: 7.5
+(
+  ggplot(
+    data = (
+      df_esw_viz 
+      %>% filter(
+        variable %in% c(
+          "ever_school",
+          "school_this_year",
+          "violence_justified",
+          "discriminated",
+          "living_with_partner",
+          "polygamous_partner"
+        )
+      )
+      %>% mutate(
+        variable = fct_relevel(
+          variable,
+         c(
+           "ever_school",
+           "school_this_year",
+           "violence_justified",
+           "discriminated",
+           "living_with_partner",
+           "polygamous_partner"
+          )
+        )
+      )
+    ),
+    aes(
+      x = value,
+      y = all_gbv_12m,
+    )
+  )
+  + geom_point(color = "skyblue", size = 3)
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 10, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + facet_wrap(
+    ~variable,
+    ncol = 3,
+    scales = "free_x",
+    # labeller = as_labeller(feature_map)
+  )
+  + scale_y_continuous(
+    labels = scales::percent,
+  )
+  + labs(
+    x = NULL,
+    y = "Reporting violence",
+  )
+)
+```
+

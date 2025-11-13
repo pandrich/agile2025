@@ -1,0 +1,915 @@
+---
+title: "Heat Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+library(tidybayes)
+# theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
+library(patchwork)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+```
+
+# Notebook settings
+
+```{r}
+# Settings
+nb_name <-  "Heat analysis and modelling"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
+label_map <- c(
+  tolerate_women_violence = "Tolerate violence",
+  live_with_partner = "Live with partner",
+  live_with_father = "Live with father",
+  in_school = "In school",
+  work = "Has worked",
+  rural = "Rural area",
+  log_pop_density = "Population density",
+  clim = "Climate factor"
+)
+
+# Var settings
+clim_var <- "value_spei_crop_mean_12m"
+covars_fem <- c(
+  "country",
+  "cluster",
+  "adm1_name",
+  "rural",
+  "log_pop_density",
+  "work",
+  "live_with_partner",
+  "tolerate_women_violence",
+  "sv",
+  "sv_np"
+)
+vars_fem <- c(covars_fem, "clim")
+covars_ch <- c(
+  "country",
+  "cluster",
+  "adm1_name",
+  "rural",
+  "log_pop_density",
+  "in_school",
+  "live_with_partner",
+  "live_with_father",
+  "tolerate_women_violence",
+  "sv",
+  "sv_np"
+)
+vars_ch <- c(covars_ch, "clim")
+
+bin_cov_fem <- c(
+  # "rural", 
+  "work", 
+  # "in_school",
+  "live_with_partner", 
+  "tolerate_women_violence"
+)
+bin_cov_ch <- c(
+  # "rural",
+  "in_school", 
+  "live_with_partner",
+  "live_with_father", 
+  "tolerate_women_violence"
+)
+cont_covs <- c("log_pop_density", "clim")
+```
+
+# Functions
+
+```{r}
+
+# calculate_marginal_values <- function(fit, data, covariate, value) {
+#   newdata <- data
+#   newdata[[covariate]] <- value
+#   
+#   epreds <- posterior_epred(fit, newdata = newdata, re_formula = NA)
+#   marginal_means <- rowMeans(epreds)
+#   
+#   tibble(
+#     covariate = covariate,
+#     covariate_value = as.factor(value),
+#     .draw = seq_along(marginal_means),
+#     expected_viol = marginal_means
+#   )
+# }
+
+
+create_ranef_df <- function(ranef_arr, group_name) {
+  df <- as.data.frame.table(ranef_arr, responseName = "value", stringsAsFactors = FALSE)
+  colnames(df)[1:3] <- c("iter", "level", "term")
+  df$group <- group_name
+  df$value <- as.numeric(df$value)
+  df
+}
+
+
+calculate_marginal_difference <- function(fit, data, covariate) {
+  newdata0 <- data
+  newdata1 <- data
+  newdata0[[covariate]] <- 0
+  newdata1[[covariate]] <- 1
+  
+  epreds0 <- posterior_epred(fit, newdata = newdata0, re_formula = NA)
+  epreds1 <- posterior_epred(fit, newdata = newdata1, re_formula = NA)
+  
+  diff_means <- rowMeans(epreds1 - epreds0)
+  
+  tibble(
+    covariate = covariate,
+    expected_diff = diff_means
+  )
+}
+
+create_df_marginal_differences <- function(fit, data, covs) {
+  (
+    lapply(covs, function(cov) {
+      calculate_marginal_difference(fit, data, cov)
+    })
+    %>% bind_rows()
+    %>% mutate(
+      covariate = label_map[covariate],
+    )
+  )
+}
+
+create_df_marginal_differences_stats <- function(marg_diff) {
+  (
+    marg_diff
+    %>% group_by(covariate)
+    %>% summarise(
+      median_exp_diff = median(expected_diff),
+      mean_exp_diff = mean(expected_diff),
+      lower95_exp_diff = quantile(expected_diff, 0.025),
+      upper95_exp_diff = quantile(expected_diff, 0.975),
+      .groups = "drop"
+    )
+    %>% arrange(median_exp_diff)
+  )
+}
+
+# calculate_marginal_grid <- function(fit, data, cov, grid_vals, rural_value) {
+#   draws_list <- vector("list", length(grid_vals))
+#   for (i in seq_along(grid_vals)) {
+#     newdata <- data
+#     newdata[[cov]] <- grid_vals[i]
+#     newdata[["rural"]] <- rural_value
+#     
+#     ep <- posterior_epred(fit, newdata = newdata, re_formula = NA)
+#     
+#     draws_list[[i]] <- rowMeans(ep)
+#   }
+#   
+#   list(
+#     covariate_value = grid_vals,
+#     expected_viol = draws_list
+#   )
+# }
+
+calculate_marginal_grid <- function(fit, data, cov, grid_vals) {
+  draws_list <- vector("list", length(grid_vals))
+  for (i in seq_along(grid_vals)) {
+    newdata <- data
+    newdata[[cov]] <- grid_vals[i]
+    ep <- posterior_epred(fit, newdata = newdata, re_formula = NA)
+    draws_list[[i]] <- rowMeans(ep)
+  }
+  
+  list(
+    covariate_value = grid_vals,
+    expected_viol = draws_list
+  )
+}
+
+summarize_draws <- function(grid, draws_list, cred = 0.95) {
+   df_list <- lapply(seq_along(grid), function(i) {
+    draws_i <- draws_list[[i]]
+    hdi_i <- bayestestR::hdi(draws_i, ci = cred)
+    tibble(
+      covariate_value = grid[i],
+      median = median(draws_i),
+      mean = mean(draws_i),
+      lower = hdi_i$CI_low,
+      upper = hdi_i$CI_high
+    )
+  })
+  bind_rows(df_list)
+}
+
+# plot_continuous_marginal <- function(df_summary, covar_label = NULL) {
+#   (
+#     ggplot(
+#       df_summary %>% filter(covariate == covar_label), 
+#       aes(
+#         x = covariate_value, 
+#         y = median, 
+#         color = factor(rural), 
+#         fill = factor(rural)
+#       )
+#     ) 
+#     + geom_ribbon(aes(ymin = lower, ymax = upper, fill = factor(rural)), alpha = 0.25, color = NA) 
+#     + geom_line(size = 1)
+#     + scale_color_manual(
+#       name = "Rural", 
+#       values = c("0" = col_palette[1], "1" = col_palette[5]),
+#       labels = c("0" = "Rural", "1" = "Urban")
+#     ) 
+#     + scale_fill_manual(
+#       name = "Rural", 
+#       values = c("0" = col_palette[1], "1" = col_palette[5]),
+#       labels = c("0" = "Rural", "1" = "Urban")
+#     ) 
+#     + labs(
+#       x = covar_label %||% unique(df_summary$covariate),
+#       y = "Marginal expected P(violence)",
+#     ) 
+#     + scale_y_continuous(labels = scales::percent_format(accuracy = 1))
+#     + theme(
+#       panel.background = element_blank(),
+#       panel.grid = element_blank(),
+#       panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+#       plot.background = element_blank(),
+#       plot.title = element_text(size = 16, hjust = 0.5),
+#       plot.subtitle = element_text(size = 14, hjust = 0.5),,
+#       axis.title = element_text(size = 16),
+#       axis.text.y = element_text(size = 15),
+#       axis.text.x = element_text(size = 15),
+#       legend.background = element_blank(),
+#       legend.title = element_blank(),
+#       legend.text = element_text(size = 15),
+#       legend.position = "inside",
+#       legend.position.inside = c(0.15, 0.8)
+#     )
+#   )
+# }
+
+generate_marginal_df <- function(fit, data, covs) {
+  results <- list()
+  for (cov in covs) {
+    rng <- range(data[[cov]], na.rm = TRUE)
+    grid_vals <- seq(rng[1], rng[2], length.out = 60)  # 60 grid points
+    mg <- calculate_marginal_grid(fit, data, cov, grid_vals)
+    s <- (
+      summarize_draws(
+        mg$covariate_value, 
+        mg$expected_viol, 
+        cred = 0.95
+      )
+      %>% mutate(
+        covariate = cov
+      )
+    )
+    results[[cov]] <- s
+  }
+
+  (
+    bind_rows(results) 
+    %>% mutate(
+      covariate = label_map[covariate],
+    )
+  )
+}
+
+
+plot_bin_marginal <- function(ppc, ppc_stats, lims = NULL) {
+    (
+      ggplot(
+        data = ppc,
+        mapping = aes(
+          y = fct_reorder(covariate, expected_diff, .fun = ~ -median(.)),
+          x = expected_diff,
+        )
+      )
+      + ggridges::geom_density_ridges(
+        aes(height = ..scaled..),
+        stat = "density",
+        orientation = "x",
+        scale = 0.6,
+        rel_min_height = 0.01,
+        alpha = 0.7,
+        color = col_palette[1],
+        fill = col_palette[2]
+      )
+      + geom_segment(
+        data = ppc_stats,
+        aes(y = covariate, yend = covariate, x = lower95_exp_diff, xend = upper95_exp_diff),
+        linewidth = 0.8,
+        color = "black",
+        inherit.aes = FALSE
+      )
+      + geom_point(
+        data = ppc_stats,
+        aes(y = covariate, x = median_exp_diff),
+        color = "black",
+        size = 2,
+        inherit.aes = FALSE
+      )
+      + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+      + theme(
+        panel.background = element_blank(),
+        panel.grid = element_blank(),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        plot.background = element_blank(),
+        plot.title = element_text(size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 16),
+        axis.text.y = element_text(size = 15),
+        axis.text.x = element_text(size = 15),
+        legend.background = element_blank(),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 13),
+      )
+      + labs(
+        x = "Average marginal effect\n(p(violence|1) − p(violence|0))",
+      )
+      + scale_y_discrete(expand = expansion(mult = c(0.1, 0.35)))
+      + scale_x_continuous(
+        limits = lims,
+        labels = scales::percent_format(accuracy = 1)
+      )
+    )
+}
+
+
+plot_continuous_marginal <- function(df_summary, covar_label = NULL, lims = NULL) {
+  (
+    ggplot(
+      df_summary %>% filter(covariate == covar_label), 
+      aes(
+        x = covariate_value, 
+        y = median, 
+      )
+    ) 
+    + geom_ribbon(
+      aes(ymin = lower, ymax = upper), 
+      alpha = 0.25, 
+      fill = col_palette[5],
+      color = NA
+    ) 
+    + geom_line(
+      size = 1,
+      color = col_palette[5]
+    )
+    + labs(
+      x = covar_label,
+      y = "Marginal expected\np(violence)",
+    ) 
+    + scale_y_continuous(
+      limits = lims,
+      labels = scales::percent_format(accuracy = 1)
+    )
+    + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),,
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 15),
+      legend.position = "inside",
+      legend.position.inside = c(0.15, 0.8)
+    )
+  )
+}
+```
+
+# Import Data
+
+```{r}
+df_clim_viol <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "climate_violence_new_vacs.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% mutate(
+    clim := scale(!!sym(clim_var)),
+    log_pop_density = scale(log_pop_density)
+  )
+)
+
+if (str_detect(clim_var, "crop")) {
+  df_clim_viol <- (
+    df_clim_viol
+    %>% filter(
+      !is.na(dist_from_last_crop_season)
+    )
+  )
+}
+  
+```
+
+```{r}
+(
+  df_clim_viol
+  %>% filter(is.na(dist_from_last_crop_season))
+)
+```
+
+# Prepare Data
+
+```{r}
+df_model_fem <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+  )
+  %>% select(all_of(vars_fem))
+  %>% na.omit()
+)
+
+df_model_ch <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+    age < 17
+  )
+  %>% select(all_of(vars_ch))
+  %>% na.omit()
+)
+```
+
+# Modeling
+
+## All Female
+
+### Any violence
+
+```{r}
+form_fem_all_viol <- bf(
+  sv ~ (
+    1 
+    + work
+    + live_with_partner
+    + tolerate_women_violence
+    # + rural
+    + log_pop_density
+    + clim
+    + (1 + clim | country/cluster)
+    # + (1 + clim | country/adm1_name)
+  )
+)
+fit_fem_all_viol <- brm(
+  formula = form_fem_all_viol,
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_fem,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Prior Predictive
+
+```{r}
+pp_check(fit_fem_all_viol)
+```
+
+#### Model Output
+
+```{r}
+fit_fem_all_viol
+```
+
+#### Random Effects
+
+```{r}
+ranefs_fem_all_viol <- ranef(fit_fem_all_viol, summary = FALSE)
+ranef_fem_all_viol_names <- names(ranefs_fem_all_viol)
+```
+
+```{r}
+df_ranefs_country_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country"]], group_name = "country")
+df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:cluster"]], group_name = "cluster")
+df_ranefs_groups_fem_all_viol <- bind_rows(df_ranefs_country_fem_all_viol, df_ranefs_cluster_fem_all_viol)
+```
+
+```{r}
+df_ranef_fem_all_viol_summary <- (
+  df_ranefs_groups_fem_all_viol
+  %>% group_by(group, level, term) 
+  %>% summarise(
+    median = median(value),
+    lower = quantile(value, probs = 0.025),
+    upper = quantile(value, probs = 0.975),
+    .groups = "drop"
+  )
+  %>% mutate(
+    level_label = paste0(level, " (", group, ")")
+  )
+  %>% group_by(term)
+  %>% arrange(median)
+  %>% mutate(level_order = row_number())
+  %>% ungroup()
+)
+```
+
+```{r}
+(
+  ggplot(
+    df_ranef_fem_all_viol_summary, 
+    aes(
+      x = median, 
+      y = fct_reorder(level_label, median)
+    )
+  )
+  + geom_point(position = position_dodge(width = 0.7), size = 2) 
+  + geom_errorbarh(aes(xmin = lower, xmax = upper), height = 0, position = position_dodge(width = 0.7))
+  + facet_wrap(~ term + group, scales = "free_y", ncol = 2)  
+  + labs(
+    x = "Effect (posterior median and 95% CrI)",
+    y = NULL,
+  ) 
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      strip.background = element_blank(),
+      strip.text = element_text(size = 16),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.ticks.y = element_blank(),
+      axis.title.y = element_blank(),
+      axis.title.x = element_text(size = 16),
+      axis.text.y = element_blank(),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+)
+
+```
+
+#### Posterior Predictive Checks
+
+##### Marginal Average Effect for Categorical variables
+
+```{r}
+# marginal_posteriors <- (
+#   lapply(bin_cov, function(cov) {
+#     bind_rows(
+#       marginal_for_covariate_value(fit_fem_all_viol, df_model_fem, cov, 0),
+#       marginal_for_covariate_value(fit_fem_all_viol, df_model_fem, cov, 1)
+#     )
+#   })
+#   %>% bind_rows()
+#   %>% mutate(
+#     covariate = factor(covariate, levels= bin_cov),
+#     covariate_value = factor(covariate_value, levels = c("0", "1"))
+#   )
+# )
+```
+
+```{r}
+expected_diffs_fem_all_viol <- create_df_marginal_differences(fit_fem_all_viol, df_model_fem, bin_cov_fem)
+expected_diffs_fem_all_viol_stats <- create_df_marginal_differences_stats(expected_diffs_fem_all_viol)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+
+plot_bin_marginal(expected_diffs_fem_all_viol, expected_diffs_fem_all_viol_stats, lims = c(-0.09, 0.09))
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_bin_fem_all_viol.png"
+)
+```
+
+##### Marginal Effect of Continuous Variables
+
+```{r}
+df_marg_cont_fem_all_viol <- generate_marginal_df(fit_fem_all_viol, df_model_fem, cont_covs)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Population density", lims = c(0.01, 0.25))
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_log_density_ur_fem_all_viol.png"
+)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Climate factor", lims = c(0.02, 0.5))
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_climate_ur_fem_all_viol.png"
+)
+```
+
+### Non-partner violence
+
+```{r}
+form_fem_np_viol <- bf(
+  sv_np ~ (
+    1 
+    + work
+    + live_with_partner
+    + tolerate_women_violence
+    # + rural
+    + log_pop_density
+    + clim
+    # + (1 + clim | country/rural/cluster)
+    + (1 + clim | country/cluster)
+    # + (1 + clim | country/adm1_name)
+  )
+)
+fit_fem_np_viol <- brm(
+  formula = form_fem_np_viol,
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_fem,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Prior Predictive
+
+```{r}
+pp_check(fit_fem_np_viol)
+```
+
+#### Model Output
+
+```{r}
+fit_fem_np_viol
+```
+
+#### Posterior Predictive Checks
+
+##### Marginal Average Effect for Categorical variables
+
+```{r}
+expected_diffs_fem_np_viol <- create_df_marginal_differences(fit_fem_np_viol, df_model_fem, bin_cov_fem)
+expected_diffs_fem_np_viol_stats <- create_df_marginal_differences_stats(expected_diffs_fem_np_viol)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+
+plot_bin_marginal(expected_diffs_fem_np_viol, expected_diffs_fem_np_viol_stats, lims = c(-0.09, 0.09))
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_bin_fem_np_viol.png"
+)
+```
+
+##### Marginal Effect of Continuous Variables
+
+```{r}
+df_marg_cont_fem_np_viol <- generate_marginal_df(fit_fem_np_viol, df_model_fem, cont_covs)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_fem_np_viol, covar_label = "Population density", lims = c(0.01, 0.20))
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_log_density_ur_fem_np_viol.png"
+)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_fem_np_viol, covar_label = "Climate factor", lims = c(0.01, 0.4))
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_climate_ur_fem_np_viol.png"
+)
+```
+
+## Children
+
+### Any violence
+
+```{r}
+form_ch_all_viol <- bf(
+  sv ~ (
+    1 
+    + in_school
+    + live_with_father
+    + live_with_partner
+    + tolerate_women_violence
+    # + rural
+    + log_pop_density
+    + clim
+    + (1 + clim | country/cluster)
+    # + (1 + clim | country/adm1_name)
+  )
+)
+fit_ch_all_viol <- brm(
+  formula = form_ch_all_viol,
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_ch,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Prior Predictive
+
+```{r}
+pp_check(fit_ch_all_viol)
+```
+
+#### Model Output
+
+```{r}
+fit_ch_all_viol
+```
+
+#### Posterior Predictive Checks
+
+##### Marginal Average Effect for Categorical variables
+
+```{r}
+expected_diffs_ch_all_viol <- create_df_marginal_differences(fit_ch_all_viol, df_model_ch, bin_cov_ch)
+expected_diffs_ch_all_viol_stats <- create_df_marginal_differences_stats(expected_diffs_ch_all_viol)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+
+plot_bin_marginal(expected_diffs_ch_all_viol, expected_diffs_ch_all_viol_stats, lims = c(-0.09, 0.09))
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_bin_ch_all_viol.png"
+)
+```
+
+##### Marginal Effect of Continuous Variables
+
+```{r}
+df_marg_cont_ch_all_viol <- generate_marginal_df(fit_ch_all_viol, df_model_ch, cont_covs)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_ch_all_viol, covar_label = "Population density")
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_log_density_ur_ch_all_viol.png"
+)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_ch_all_viol, covar_label = "Climate factor")
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_climate_ur_ch_all_viol.png"
+)
+```
+
+### Non-partner violence
+
+```{r}
+form_ch_np_viol <- bf(
+  sv_np ~ (
+    1 
+    + in_school
+    + live_with_father
+    + live_with_partner
+    + tolerate_women_violence
+    # + rural
+    + log_pop_density
+    + clim
+    + (1 + clim | country/cluster)
+    # + (1 + clim | country/adm1_name)
+  )
+)
+fit_ch_np_viol <- brm(
+  formula = form_ch_np_viol,
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_ch,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Prior Predictive
+
+```{r}
+pp_check(fit_ch_np_viol)
+```
+
+#### Model Output
+
+```{r}
+fit_ch_np_viol
+```
+
+#### Posterior Predictive Checks
+
+##### Marginal Average Effect for Categorical variables
+
+```{r}
+expected_diffs_ch_np_viol <- create_df_marginal_differences(fit_ch_np_viol, df_model_ch, bin_cov_ch)
+expected_diffs_ch_np_viol_stats <- create_df_marginal_differences_stats(expected_diffs_ch_np_viol)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+
+plot_bin_marginal(expected_diffs_ch_np_viol, expected_diffs_ch_np_viol_stats, lims = c(-0.09, 0.09))
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_bin_ch_np_viol.png"
+)
+```
+
+##### Marginal Effect of Continuous Variables
+
+```{r}
+df_marg_cont_ch_np_viol <- generate_marginal_df(fit_ch_np_viol, df_model_ch, cont_covs)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_ch_np_viol, covar_label = "Population density")
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_log_density_ur_ch_np_viol.png"
+)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_continuous_marginal(df_marg_cont_ch_np_viol, covar_label = "Climate factor")
+
+ggsave(
+  path = fig_dir,
+  filename = "marginal_predicted_prob_climate_ur_ch_np_viol.png"
+)
+```

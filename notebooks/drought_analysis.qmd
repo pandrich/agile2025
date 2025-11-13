@@ -1,0 +1,500 @@
+---
+title: "Drought Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup 
+
+```{r setup}
+# Packages
+# library(tidyverse)
+library(dplyr)
+library(brms)
+library(rstan)
+
+# Set random seed
+nb_name <- "Agile 2025 - Drought Analysis"
+seed <- sum(sapply(stringr::str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+
+# Computational parameters
+rstan_options(auto_write = TRUE)              # Cache compiled Stan programs
+options(mc.cores = parallel::detectCores())   # Parallelize chains
+parallel:::setDefaultClusterOptions(setup_strategy = "sequential")
+```
+
+# Load Data
+
+## Geographies
+
+### Mozambique
+
+```{r}
+# sf_moz <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+#   )
+#   %>% rename_with(tolower)
+#   %>% select(
+#     adm1_name = dhsregsp,
+#     adm1_code = regcode
+#   )
+#   %>% arrange(adm1_code)
+# )
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "moz_adm_20190607b_shp", "moz_admbnda_adm1_ine_20190607.shp", fsep = "/"),
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_pcode,
+    adm1_name = adm1_pt, 
+    geometry
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+# sf_zwe <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+#   )
+#   %>% rename_with(tolower)
+#   %>% select(
+#     adm1_name = dhsregsp,
+#     adm1_code = regcode
+#   )
+#   %>% arrange(adm1_code)
+# )
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "zwe_admbnda_adm1_zimstat_ocha_20180911", "zwe_admbnda_adm1_zimstat_ocha_20180911.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_pcode,
+    adm1_name = adm1_en,
+  )
+  %>% arrange(adm1_pcode)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregsp,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+## SPEI
+
+```{r}
+rast_spei <- (
+  terra::rast(
+    file.path(
+      raw_data_dir,
+      "spei",
+      "spei01.nc"
+    )
+  )
+)
+```
+
+
+## DIEM
+
+### Mozambique
+
+```{r}
+df_diem_shock_moz_new <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_income_shocks_and_needs_MOZ.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(coll_mid_date, format = "%m/%d/%Y"),
+  )
+  %>% select(
+    date,
+    round,
+    adm1_pcode,
+    adm1_name,
+    num_surveys = surveys,
+    tot_income_median,
+    tot_income_ci_low,
+    tot_income_ci_high,
+    perc_crop_producers = hh_agricactivity_1,
+    perc_female_head = hh_gender_2,
+    perc_no_education = hh_education_1,
+    perc_married = hh_maritalstat_2,
+    perc_prod_and_sale_crops_3_months = income_main_1,
+    perc_cold_3_months = shock_coldtemporhail_1,
+    perc_drought_3_months = shock_drought_1,
+    perc_flood_3_months = shock_flood_1,
+    perc_hurricane_3_months = shock_hurricane_1,
+  )
+)
+
+df_diem_shock_moz_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_income_shocks_and_needs_MOZ_archived.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(`Middle of data collection`, format = "%m/%d/%Y"),
+  )
+  %>% select(
+    date,
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    adm1_name = "Admin 1 name",
+    num_surveys = "Nb. of households surveyed",
+    tot_income_median = "total income - median",
+    tot_income_ci_low = "total income - ci low",
+    tot_income_ci_high = "total income - ci high",
+    perc_crop_producers = "hh agric activity - crop production",
+    perc_female_head = "gender head of hh - female",
+    perc_no_education = "education head of hh - none",
+    perc_married = "marital status head of hh - married",
+    perc_prod_and_sale_crops_3_months = "main income - staple crops",
+    perc_cold_3_months = "shock - cold temperatures or hail",
+    perc_drought_3_months = "shock - drought",
+    perc_flood_3_months = "shock - flood",
+    perc_hurricane_3_months = "shock - hurricane or cyclone"
+  )
+)
+
+df_diem_shock_moz <- (
+  bind_rows(df_diem_shock_moz_arc, df_diem_shock_moz_new)
+  %>% mutate(
+    adm1_name = str_to_title(adm1_name),
+  )
+)
+
+df_diem_fs_moz_new <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_food_security_MOZ.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    round,
+    adm1_pcode,
+    perc_begged_30_days = cs_begged_1,
+    perc_borrowed_30_days = cs_borrowed_money_1,
+    perc_borrowed_or_help_30_days = cs_borrowed_or_helped_1,
+    perc_purc_food_on_credit_30_days = cs_credit_1,
+    perc_eat_away_30_days = cs_eat_elsewhere_1,
+    perc_migrate_30_days = cs_hh_migration_1,
+    perc_illegal_30_days = cs_illegal_1,
+    perc_left_school_30days = cs_no_school_1
+  )
+)
+
+df_diem_fs_moz_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_food_security_MOZ_archived.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    perc_begged_30_days = "cs emergency begged - yes",
+    perc_borrowed_30_days = "cs stress borrowed money - yes",
+    perc_borrowed_or_help_30_days = "cs stress borrowed or helped - yes",
+    perc_purc_food_on_credit_30_days = "cs stress credit - yes",
+    perc_eat_away_30_days = "cs stress eat elsewhere - yes",
+    perc_migrate_30_days = "cs emergency hh migration - yes",
+    perc_illegal_30_days = "cs emergency illegal - yes",
+    perc_left_school_30days = "cs crisis - no school - yes"
+  )
+)
+
+df_diem_fs_moz <- bind_rows(df_diem_fs_moz_arc, df_diem_fs_moz_new)
+
+sf_diem_moz <- (
+  sf_moz
+  %>% merge(
+    df_diem_shock_moz,
+    by = c("adm1_pcode"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_diem_fs_moz,
+    by = c("round", "adm1_pcode"),
+    all.x = TRUE
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+df_diem_shock_zwe_new <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_income_shocks_and_needs_ZWE.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(coll_mid_date, format = "%m/%d/%Y"),
+  )
+  %>% select(
+    date,
+    round,
+    adm1_pcode,
+    adm1_name,
+    num_surveys = surveys,
+    tot_income_median,
+    tot_income_ci_low,
+    tot_income_ci_high,
+    perc_crop_producers = hh_agricactivity_1,
+    perc_female_head = hh_gender_2,
+    perc_no_education = hh_education_1,
+    perc_married = hh_maritalstat_2,
+    perc_prod_and_sale_crops_3_months = income_main_1,
+    perc_cold_3_months = shock_coldtemporhail_1,
+    perc_drought_3_months = shock_drought_1,
+    perc_flood_3_months = shock_flood_1,
+    perc_hurricane_3_months = shock_hurricane_1,
+  )
+)
+
+df_diem_shock_zwe_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_income_shocks_and_needs_ZWE_archived.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    date = as.Date(`Middle of data collection`, format = "%m/%d/%Y"),
+  )
+  %>% select(
+    date,
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    adm1_name = "Admin 1 name",
+    num_surveys = "Nb. of households surveyed",
+    tot_income_median = "total income - median",
+    tot_income_ci_low = "total income - ci low",
+    tot_income_ci_high = "total income - ci high",
+    perc_crop_producers = "hh agric activity - crop production",
+    perc_female_head = "gender head of hh - female",
+    perc_no_education = "education head of hh - none",
+    perc_married = "marital status head of hh - married",
+    perc_prod_and_sale_crops_3_months = "main income - staple crops",
+    perc_cold_3_months = "shock - cold temperatures or hail",
+    perc_drought_3_months = "shock - drought",
+    perc_flood_3_months = "shock - flood",
+    perc_hurricane_3_months = "shock - hurricane or cyclone"
+  )
+)
+
+df_diem_shock_zwe <- (
+  bind_rows(df_diem_shock_zwe_arc, df_diem_shock_zwe_new)
+  %>% mutate(
+    adm1_name = str_to_title(adm1_name),
+  )
+)
+
+df_diem_fs_zwe_new <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_food_security_ZWE.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    round,
+    adm1_pcode,
+    perc_begged_30_days = cs_begged_1,
+    perc_borrowed_30_days = cs_borrowed_money_1,
+    perc_borrowed_or_help_30_days = cs_borrowed_or_helped_1,
+    perc_purc_food_on_credit_30_days = cs_credit_1,
+    perc_eat_away_30_days = cs_eat_elsewhere_1,
+    perc_migrate_30_days = cs_hh_migration_1,
+    perc_illegal_30_days = cs_illegal_1,
+    perc_left_school_30days = cs_no_school_1
+  )
+)
+
+df_diem_fs_zwe_arc <- (
+  read_csv(
+    file.path(raw_data_dir, "DIEM", "diem_food_security_ZWE_archived.csv", fsep = "/"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    round,
+    adm1_pcode = "Admin 1 PCODE",
+    perc_begged_30_days = "cs emergency begged - yes",
+    perc_borrowed_30_days = "cs stress borrowed money - yes",
+    perc_borrowed_or_help_30_days = "cs stress borrowed or helped - yes",
+    perc_purc_food_on_credit_30_days = "cs stress credit - yes",
+    perc_eat_away_30_days = "cs stress eat elsewhere - yes",
+    perc_migrate_30_days = "cs emergency hh migration - yes",
+    perc_illegal_30_days = "cs emergency illegal - yes",
+    perc_left_school_30days = "cs crisis - no school - yes"
+  )
+)
+
+df_diem_fs_zwe <- bind_rows(df_diem_fs_zwe_arc, df_diem_fs_zwe_new)
+
+
+sf_diem_zwe <- (
+  sf_zwe
+  %>% merge(
+    df_diem_shock_zwe,
+    by = c("adm1_pcode"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_diem_fs_zwe,
+    by = c("round", "adm1_pcode"),
+    all.x = TRUE
+  )
+)
+
+```
+
+
+
+## Violence
+
+```{r}
+df_viol <- (
+  haven::read_dta(
+    file.path(proc_data_dir, "merged_df_south_three_drought.dta")
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    sex = as.numeric(sex) - 1,
+    hhsex = hhsex - 1,
+    date = ceiling_date(as.Date(paste0(year, "-", month, "-", "01")), "month") - days(1),
+    rural = as.numeric(rural_urban) - 1,
+  )
+  %>% select(
+    country,
+    cluster,
+    adm1_name = region,
+    age = q2,
+    sample_weight = sampleweight,
+    date,
+    rural,
+    orphan,
+    married,
+    child_mar = childmar,
+    food_insec,
+    no_education = educationever,
+    school_enrol,
+    poor,
+    vpoor,
+    sv_ipv_12m,
+    pv_ipv_12m,
+    sv_any_12m = any_sv_12m,
+    pv_child_12m = child_pv_12m,
+  )
+  %>% filter(!is.na(date))
+)
+```
+
+
+# Exploration
+
+```{r}
+(
+  df
+  %>% group_by(child_mar)
+  %>% summarise(
+    violence_rate = mean(sv_any_12m)
+  )
+)
+```
+
+```{r}
+(
+  df
+  %>% group_by(rural_urban)
+  %>% summarise(
+    violence_rate = mean(sv_any_12m)
+  )
+)
+```
+
+
+
+
+# DAG
+
+```{r}
+#| fig-width: 4
+#| fig-height: 3.5
+new_dag <- ggdag::dagify(
+  FB ~ Age + Dens,
+  Age ~ Urb,
+  Dens ~ Urb,
+  Lum ~ Dens,
+  outcome = "FB"
+)
+dagitty::coordinates(new_dag) <- list(
+  x = c(Urb = 0.1, Dens = 0.2, Age = 0, Lum = 0.2, FB = 0.1),
+  y = c(Urb = 0.4, Dens = 0.3, Age = 0.3, Lum = 0.1, FB = 0)
+)
+(
+  ggdag::ggdag(new_dag)
+  + theme(
+    panel.background = element_blank(),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+  )
+)
+
+ggsave("dag.png", path = img_dir, width = 4, height = 3.5)
+```
+
+# Simulations
+
+```{r}
+
+```
+
+
+
+# Models
+
+
+```{r}
+fit <- brm(
+  formula = sv_any_12m | weights(sample_weight) ~ rural_urban + age_group + poor + (1 + drought * married * no_education || country),
+  data = df,
+  family = "bernoulli",
+  # prior = c(
+  #   set_prior("cauchy(0, 0.5)", class = "sd")
+  # ),
+  warmup = 1000,
+  iter = 2000,
+  chains = 4,
+  # backend="cmdstanr",
+  # algorithm = "pathfinder"
+)
+    
+```
+
+```{r}
+summary(fit, waic = TRUE)
+```
+

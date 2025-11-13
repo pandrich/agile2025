@@ -1,0 +1,848 @@
+---
+title: "UTCI Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
+```
+
+# Parameters
+
+```{r}
+coords <- list(
+  "MOZ" = c(30, 41.2, -26.9, -10.3),
+  "ZWE" = c(25.2, 33.1, -22.5, -15.45),
+  "LSO" = c(26.99, 29.46, -30.68, -28.55),
+  "NAM" = c(11.65, 25.27, -29, -16.9),
+  "ZMB" = c(21.95, 33.73, -18.1, -8.15),
+  "UGA" = c(29.55, 35.05, -1.49, 4.22),
+  "KEN" = c(33.90, 41.92, -4.68, 5.05)
+)
+```
+
+# Functions
+
+```{r}
+build_spei_ts_country <- function(iso3, spei_rast, pop_rast, adm_pop, adm_shapes, start_date) {
+  rast_times <- terra::time(spei_rast)
+  start_index <- match(start_date, rast_times)
+  n_layers <- terra::nlyr(spei_rast)
+  spei_iso_rast  <- (
+    spei_rast[paste0("spei_", n_layers)]
+    %>% terra::crop(terra::ext(unlist(coords[iso3])))
+  )
+  spei_iso_poly <- (
+    spei_iso_rast
+    %>% terra::as.polygons(values = FALSE, dissolve = FALSE, na.rm = FALSE)
+  )
+  pop_sum <- (
+    terra::extract(
+      pop_rast,
+      spei_iso_poly,
+      na.rm = TRUE,
+      cells = TRUE,
+      exact = TRUE
+    )
+    %>% group_by(cell)
+    %>% mutate(
+      fraction = fraction / sum(fraction, na.rm = TRUE)
+    )
+    %>% group_by(ID)
+    %>% summarise(
+      pop = sum(pop * fraction, na.rm = TRUE)
+    )
+  )
+  dfs <- list()
+  for (t in start_index:n_layers) {
+    rast_t <- (
+      spei_rast[paste0("spei_", t)]
+      %>% terra::crop(terra::ext(unlist(coords[iso3])))
+      %>% rename(
+        spei = paste0("spei_", t)
+      )
+    )
+    date <- terra::time(rast_t)
+    year <- year(as.Date(date))
+    month <- month(as.Date(date))
+    if (month == 1) {
+      print(paste("Processing data for", iso3, year))
+    }
+    spei_weighted_mat <- terra::values(rast_t, mat = TRUE) * pop_sum$pop
+    spei_weighted <- terra::rast(rast_t)
+    terra::values(spei_weighted) <- spei_weighted_mat
+
+    adm_spei_t <- (
+      spei_weighted
+      %>% terra::extract(
+        adm_shapes,
+        na.rm = TRUE,
+        cells = TRUE,
+        exact = TRUE
+      )
+      %>% group_by(cell)
+      %>% mutate(
+        fraction = fraction / sum(fraction, na.rm = TRUE)
+      )
+      %>% group_by(ID)
+      %>% summarise(
+        across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
+      )
+      %>% mutate(
+        pop = adm_pop$pop,
+        date = as.Date(date) - days(1)
+      )
+      %>% mutate(
+        across(-c(ID, pop, date), ~ (.)/pop)
+      )
+      %>% as.data.frame()
+    )
+
+    dfs[[(t-(start_index - 1))]] <- adm_spei_t
+    (
+      bind_rows(dfs)
+      %>% rename(id = ID)
+      %>% write_csv(file.path(proc_data_dir, paste0("spei_", iso3, ".csv")))
+    )
+  }
+  df <- (
+    bind_rows(dfs)
+    %>% rename(id = ID)
+  )
+  df %>% write_csv(file.path(proc_data_dir, paste0("spei_", iso3, ".csv")))
+  df
+}
+```
+
+# Data Import
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+### Uganda
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+    layer = "uga_admbnda_adm2_ubos_20200824"
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    id = row_number()
+  )
+  %>% select(
+    id,
+    adm1_name = admin1name_en,
+    adm2_name = admin2name_en,
+    adm2_pcode = admin2pcode,
+    # adm3_name = admin3name_en,
+    # adm4_name = admin4name_en,
+    # adm4_pcode = admin4pcode,
+    geometry = shape
+  )
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "ken_adm_iebc_20191031_shp", "ken_admbnda_adm1_iebc_20191031.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    adm1_name = adm1_en,
+    adm1_code = adm1_pcode
+  )
+  %>% arrange(adm1_code)
+)
+```
+
+
+## Population
+
+### Mozambique
+
+```{r}
+rast_pop_moz_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "moz_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_moz_2022 <- (
+  rast_pop_moz_2022
+  %>% terra::extract(
+    sf_moz,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+rast_pop_zwe_2022 <- (
+  terra::rast(  
+    file.path(raw_data_dir, "population", "zwe_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zwe_2022 <- (
+  rast_pop_zwe_2022
+  %>% terra::extract(
+    sf_zwe,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+rast_pop_lso_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "lso_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_lso_2022 <- (
+  rast_pop_lso_2022
+  %>% terra::extract(
+    sf_lso,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Namibia
+
+```{r}
+rast_pop_nam_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "nam_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_nam_2022 <- (
+  rast_pop_nam_2022
+  %>% terra::extract(
+    sf_nam,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Zambia
+
+```{r}
+rast_pop_zmb_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "zmb_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zmb_2022 <- (
+  rast_pop_zmb_2022
+  %>% terra::extract(
+    sf_zmb,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Uganda
+
+```{r}
+rast_pop_uga_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_uga_2022 <- (
+  rast_pop_uga_2022
+  %>% terra::extract(
+    sf_uga,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+### Kenya
+
+```{r}
+rast_pop_ken_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "ken_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_ken_2022 <- (
+  rast_pop_ken_2022
+  %>% terra::extract(
+    sf_ken,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+
+
+## SPEI
+
+Data obtained using the Climate Data Store API
+
+### Method Outline
+
+```{r}
+spei_rast <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "SPEI",
+    "spei01.nc"
+  )
+)
+n_layers <- terra::nlyr(spei_rast)
+```
+
+```{r}
+spei_moz_rast  <- (
+  spei_rast[paste0("spei_", n_layers)]
+  %>% terra::crop(terra::ext(30, 41.2, -26.9, -10.3))
+)
+spei_moz_poly <- (
+  spei_moz_rast
+  %>% terra::as.polygons(values = FALSE, dissolve = FALSE, na.rm = FALSE)
+)
+```
+
+#### UTCI Grid
+
+```{r}
+(
+  ggplot()
+  + geom_sf(
+    data = spei_moz_poly,
+    fill = NA,
+    color = "gray"
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "SPEI Grid",
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_grid_moz.png",
+  width = 3,
+  height = 5
+)
+```
+
+#### UTCI Grid Zoom In
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_moz_2022 %>% terra::crop(terra::ext(31.5, 34.5, -15.8, -12.8)),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = spei_moz_poly,
+    fill = NA,
+    color = "gray",
+    linewidth = 1.3
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(31.5, 34.5),
+    ylim = c(-15.8, -12.8)
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_grid_moz_zoom_pop.png",
+  width = 5,
+  height = 4
+)
+```
+
+#### UTCI times population
+
+```{r}
+pop_sum <- (
+  terra::extract(
+    rast_pop_moz_2022,
+    spei_moz_poly,
+    cells = TRUE,
+    na.rm = TRUE,
+    exact = TRUE
+  )
+  # %>% filter(!is.na(pop))
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+spei_moz_weighted_mat <- terra::values(spei_moz_rast, mat = TRUE) * pop_sum$pop
+spei_moz_weighted <- terra::rast(spei_moz_rast)
+terra::values(spei_moz_weighted) <- spei_moz_weighted_mat
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 4
+
+spei_moz_weighted_cropped <- (
+  spei_moz_weighted
+  %>% terra::crop(terra::ext(31.5, 34.5, -15.8, -12.8))
+)
+
+(
+  ggplot()
+  + geom_spatraster(
+    data = spei_moz_weighted_cropped,
+    mapping = aes(fill = spei_905)
+  )
+  + scale_fill_paletteer_c(
+    "scico::bilbao",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = spei_moz_poly,
+    fill = NA,
+    color = "gray",
+    linewidth = 1.3
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(32.5, 33.5),
+    ylim = c(-14.8, -13.8)
+  )
+  # + coord_sf(
+  #   xlim = c(30.3, 35.3),
+  #   ylim = c(-14, -17.7)
+  # )
+  + labs(
+    fill = "SPEI * Population"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+#### Weighted UTCI
+
+```{r}
+adm1_spei_month <- (
+  spei_moz_weighted
+  %>% terra::extract(
+    sf_moz,
+    cells = TRUE,
+    na.rm = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
+  )
+  %>% mutate(
+    pop = adm1_pop_moz_2022$pop,
+    date = ceiling_date(as.Date(paste0("2024", "-", "01", "-", "01"), format = "%Y-%m-%d"), "month") - days(1)
+  )
+  %>% mutate(
+    across(-c(ID, pop, date), ~ (.)/pop)
+  )
+  %>% as.data.frame()
+  %>% rename(
+    adm1_code = ID
+  )
+)
+```
+
+```{r}
+sf_adm1_spei_month <- (
+  sf_moz
+  %>% merge(
+    adm1_spei_month,
+    by = "adm1_code",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_adm1_spei_month %>% filter(adm1_name != "Maputo City"),
+    mapping = aes(fill = spei_905),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted SPEI Index",
+    subtitle = "January 2024",
+    fill = "SPEI"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "spei_weighted_moz.png",
+  width = 4,
+  height = 5
+)
+```
+
+### Mozambique
+
+```{r}
+spei_moz <- build_spei_ts_country("MOZ", spei_rast, rast_pop_moz_2022, adm1_pop_moz_2022, sf_moz, "2000-01-01")
+```
+
+### Zimbabwe
+
+```{r}
+spei_zwe <- build_spei_ts_country("ZWE", spei_rast, rast_pop_zwe_2022, adm1_pop_zwe_2022, sf_zwe, "2000-01-01")
+```
+
+### Lesotho
+
+```{r}
+spei_lso <- build_spei_ts_country("LSO", spei_rast, rast_pop_lso_2022, adm1_pop_lso_2022, sf_lso, "2000-01-01")
+```
+
+### Namibia
+
+```{r}
+spei_nam <- build_spei_ts_country("NAM", spei_rast, rast_pop_nam_2022, adm1_pop_nam_2022, sf_nam, "2000-01-01")
+
+```
+
+### Zambia
+
+```{r}
+spei_zmb <- build_spei_ts_country("ZMB", spei_rast, rast_pop_zmb_2022, adm1_pop_zmb_2022, sf_zmb, "2000-01-01")
+```
+
+### Uganda
+
+```{r}
+spei_uga <- build_spei_ts_country("UGA", spei_rast, rast_pop_uga_2022, adm2_pop_uga_2022, sf_uga, "2000-01-01")
+```
+
+### Kenya
+
+```{r}
+spei_ken <- build_spei_ts_country("KEN", spei_rast, rast_pop_ken_2022, adm_pop_ken_2022, sf_ken, "2000-01-01")
+```

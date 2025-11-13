@@ -1,0 +1,1459 @@
+---
+title: "Heat Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(bayesplot)
+library(tidybayes)
+# theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
+library(patchwork)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+
+# Settings
+nb_name <-  "Heat analysis and modelling"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
+```
+
+Filter data to under 17 and women
+
+# Functions
+
+```{r}
+standardize <- function(array) {
+  (array - mean(array)) / sd(array)
+}
+```
+
+# Import Data
+
+```{r}
+df_clim_viol_both <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "climate_violence_bothaina.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% filter(!is.na(date))
+)
+```
+
+```{r}
+df_clim_viol_new <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "climate_violence_20251013.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% filter(!is.na(date))
+)
+```
+
+# Process data
+
+```{r}
+df_clim_viol_adm1_both <- (
+  df_clim_viol_both
+  %>% group_by(country, adm1_name, log_pop_density)
+  %>% summarise(
+    across(-c(date, cluster, sample_weight, sv_any_12m), ~ mean(., na.rm = TRUE)),
+    sv_any_12m = sum(sv_any_12m, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+df_clim_viol_adm1_new <- (
+  df_clim_viol_new
+  %>% group_by(country, adm1_name, log_pop_density)
+  %>% summarise(
+    across(-c(date, cluster, sample_weight, sv), ~ mean(., na.rm = TRUE)),
+    sv = sum(sv, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+df_clim_viol_clus_both <- (
+  df_clim_viol_both
+  %>% group_by(country, cluster)
+  %>% summarise(
+    across(-c(date, adm1_name, sample_weight, sv_any_12m), ~ mean(., na.rm = TRUE)),
+    sv_any_12m = sum(sv_any_12m, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+  %>% mutate(
+    value_binned = cut_width(value_utci_days_above_32_daily_max_sum_12m, 5),
+    dev_value_binned = cut_width(dev_value_utci_days_above_32_daily_max_sum_12m, 2)
+  )
+)
+```
+
+```{r}
+df_clim_viol_clus_new <- (
+  df_clim_viol_new
+  %>% group_by(country, cluster)
+  %>% summarise(
+    across(-c(date, adm1_name, sample_weight, sv), ~ mean(., na.rm = TRUE)),
+    sv_any_12m = sum(sv, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+  %>% mutate(
+    value_binned = cut_width(value_utci_days_above_32_daily_max_sum_12m, 5),
+    dev_value_binned = cut_width(dev_value_utci_days_above_32_daily_max_sum_12m, 2)
+  )
+)
+```
+
+# Modelling Bothaina
+
+## By Admin area
+
+```{r}
+df_model_adm1_both <- (
+  df_clim_viol_adm1_both
+  %>% mutate(
+    dev_utci = scale(dev_value_utci_days_above_32_daily_max_sum_12m),
+    utci = scale(value_utci_days_above_32_daily_max_sum_12m)
+  )
+  %>% select(
+    country,
+    adm1_name,
+    age,
+    married,
+    # no_education,
+    food_insec,
+    school_enrol,
+    poor,
+    rural,
+    log_pop_density,
+    utci,
+    dev_utci,
+    sv_any_12m,
+    n
+  )
+)
+
+model_data_adm1_both <- list(
+  C = df_clim_viol_adm1_both$country,
+  M = df_clim_viol_adm1_both$married,
+  E = df_clim_viol_adm1_both$no_education,
+  P = df_clim_viol_adm1_both$poor,
+  R = df_clim_viol_adm1_both$rural,
+  Pop = df_clim_viol_adm1_both$log_pop_density,
+  U = scale(df_clim_viol_adm1_both$value_utci_days_above_32_daily_max_sum_12m),
+  DU = scale(df_clim_viol_adm1_both$dev_value_utci_days_above_32_daily_max_sum_12m),
+  V = df_clim_viol_adm1_both$sv_any_12m,
+  trials = df_clim_viol_adm1_both$n,
+  N = nrow(df_clim_viol_adm1_both)
+)
+  
+
+```
+
+```{r}
+(
+  data.frame(
+    theta = plogis(ggdist::rstudent_t(n=20000, df=10, mu=-3.5, sigma=1))
+  ) 
+  %>% mcmc_hist() 
+  + xlim(c(0,1))
+)
+```
+
+### Absolute UTCI
+
+```{r}
+fit_adm1_both <- brm(
+  sv_any_12m | trials(n) ~ (
+    1 
+    + married 
+    # + no_education 
+    + school_enrol
+    + poor
+    + rural
+    # + log_pop_density
+    # + dev_utci
+    + utci
+    + (1|country)
+    # + (0 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|married)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|no_education)
+  ),
+  family = binomial("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_adm1_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+```{r}
+pp_check(fit_adm1_both)
+```
+
+```{r}
+conditional_effects(fit_adm1_both, effects = "utci")
+```
+
+```{r}
+fit_adm1_both
+```
+
+```{r}
+(
+  fit_adm1_both
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country,])
+  # %>% posterior::mutate_variables(
+  #   country_mean = plogis(b_Intercept, r_country[country,])
+  # )
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+  %>% ggplot(
+    aes(
+      xdist=country_mean,
+      y = country
+    )
+  )
+  + stat_halfeye()
+)
+```
+
+### Deviation UTCI
+
+```{r}
+fit_adm1_dev_both <- brm(
+  sv_any_12m | trials(n) ~ (
+    1 
+    + married 
+    # + no_education 
+    + school_enrol
+    + poor
+    + rural
+    # + log_pop_density
+    + dev_utci
+    # + (1|country)
+    + (1 + dev_utci||country)
+  ),
+  family = binomial("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_adm1_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+```{r}
+pp_check(fit_adm1_dev_both)
+```
+
+```{r}
+conditional_effects(fit_adm1_dev_both, effects = "dev_utci")
+```
+
+```{r}
+fit_adm1_dev_both
+```
+
+```{r}
+dim(
+  fit_adm1_dev
+  %>% as_draws_df()
+  # %>% as_draws_df()
+  # %>% select(
+  #   a = b_Intercept,
+  #   b_dev_utci,
+  #   contains("r_country")
+  # )
+  # %>% spread_rvars(b_Intercept, r_country[country, Intercept], r_country[country, dev_utci])
+  # # %>% posterior::mutate_variables(
+  # #   country_mean = plogis(b_Intercept, r_country[country,])
+  # # )
+  # %>% mutate(
+  #   country_mean_lat = (b_Intercept + r_country),
+  #   country_mean = 1 / (1 + exp(-country_mean_lat))
+  # )
+  # %>% ggplot(
+  #   aes(
+  #     xdist=country_mean,
+  #     y = country
+  #   )
+  # )
+  # + stat_halfeye()
+)
+```
+
+## By Cluster
+
+```{r}
+df_model_clus_both <- (
+  df_clim_viol_clus_both
+  %>% mutate(
+    dev_utci = scale(dev_value_utci_days_above_32_daily_max_sum_12m),
+    utci = scale(value_utci_days_above_32_daily_max_sum_12m)
+  )
+  %>% select(
+    country,
+    cluster,
+    married,
+    school_enrol,
+    no_education,
+    poor,
+    rural,
+    log_pop_density,
+    utci,
+    dev_utci,
+    sv_any_12m,
+    n
+  )
+)
+
+# model_data_clus <- list(
+#   C = df_utci_viol_clus$country,
+#   M = df_utci_viol_clus$married,
+#   E = df_utci_viol_clus$no_education,
+#   P = df_utci_viol_clus$poor,
+#   R = df_utci_viol_clus$rural,
+#   Pop = df_utci_viol_clus$log_pop_density,
+#   U = scale(df_utci_viol_clus$value_utci_days_above_32_daily_max_sum_12m),
+#   DU = scale(df_utci_viol_clus$dev_value_utci_days_above_32_daily_max_sum_12m),
+#   V = df_utci_viol_clus$sv_any_12m,
+#   trials = df_utci_viol_clus$n,
+#   N = nrow(df_utci_viol_clus)
+# )
+  
+
+```
+
+### Absolute UTCI
+
+```{r}
+fit_clus_both <- brm(
+  sv_any_12m | trials(n) ~ (
+    1 
+    + married 
+    # + no_education 
+    + school_enrol
+    + poor
+    + rural
+    # + log_pop_density
+    # + dev_utci
+    + utci
+    + (1|country)
+    # + (0 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|married)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|no_education)
+  ),
+  family = binomial("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_clus_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+```{r}
+pp_check(fit_clus_both)
+```
+
+```{r}
+conditional_effects(fit_clus_both, effects = "utci")
+```
+
+```{r}
+fit_clus_both
+```
+
+```{r}
+(
+  fit_clus_both
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country,])
+  # %>% posterior::mutate_variables(
+  #   country_mean = plogis(b_Intercept, r_country[country,])
+  # )
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+  %>% ggplot(
+    aes(
+      xdist=country_mean,
+      y = country
+    )
+  )
+  + stat_halfeye()
+)
+```
+
+### Deviation UTCI
+
+```{r}
+fit_clus_dev_both <- brm(
+  sv_any_12m | trials(n) ~ (
+    1 
+    + married 
+    # + no_education
+    + school_enrol
+    + poor
+    + rural
+    # + log_pop_density
+    + dev_utci
+    # + (1|country)
+    + (1 + dev_utci||country)
+    # + (0 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|country)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|married)
+    # + (1 + dev_value_utci_days_above_32_daily_max_sum_12m|no_education)
+  ),
+  family = binomial("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_clus_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+```{r}
+conditional_effects(fit_clus_dev_both, effects = "dev_utci")
+```
+
+```{r}
+fit_clus_dev_both
+```
+
+```{r}
+(
+  fit_clus_dev_both
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country,])
+  # %>% posterior::mutate_variables(
+  #   country_mean = plogis(b_Intercept, r_country[country,])
+  # )
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+  %>% ggplot(
+    aes(
+      xdist=country_mean,
+      y = country
+    )
+  )
+  + stat_halfeye()
+)
+```
+
+## By Respondent
+
+```{r}
+df_model_ind_both <- (
+  df_clim_viol_both
+  %>% mutate(
+    dev_utci = scale(dev_value_utci_days_above_32_daily_max_sum_12m),
+    utci = scale(value_utci_days_above_32_daily_max_sum_12m)
+  )
+  %>% select(
+    sample_weight,
+    country,
+    adm1_name,
+    cluster,
+    married,
+    food_insec,
+    no_education,
+    school_enrol,
+    poor,
+    rural,
+    log_pop_density,
+    utci,
+    dev_utci,
+    sv_any_12m
+  )
+)
+
+# model_data_ind <- list(
+#   W = df_utci_viol$sample_weight,
+#   C = as.numeric(as.factor(df_utci_viol$country)),
+#   NC = length(levels(as.factor(df_utci_viol$country))),
+#   Cl = as.numeric(as.factor(df_utci_viol$cluster)),
+#   NCl = length(levels(as.factor(df_utci_viol$cluster))),
+#   M = df_utci_viol$married,
+#   E = df_utci_viol$no_education,
+#   P = df_utci_viol$poor,
+#   R = df_utci_viol$rural,
+#   Pop = df_utci_viol$log_pop_density,
+#   U = standardise(df_utci_viol$value_utci_days_above_32_daily_max_sum_12m),
+#   DU = standardise(df_utci_viol$dev_value_utci_days_above_32_daily_max_sum_12m),
+#   V = df_utci_viol$sv_any_12m,
+#   N = nrow(df_utci_viol),
+#   prior_only = as.integer(FALSE)
+# )
+  
+
+```
+
+### Absolute UTCI
+
+Do we need weights?
+
+```{r}
+fit_ind_both <- brm(
+  sv_any_12m ~ (
+    1 
+    + married 
+    + no_education
+    # + school_enrol
+    # + poor
+    + rural
+    # + food_insec
+    # + log_pop_density
+    # + dev_utci
+    + utci
+    + (1|country)
+    + (0 + utci| rural)
+    # + (1|country/cluster)
+  ),
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_ind_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Model Checks
+
+##### Prior Predictive
+
+```{r}
+pp_check(fit_ind_both)
+```
+
+##### Model Output
+
+```{r}
+fit_ind_both
+```
+
+##### Parameters Viz
+
+###### Intercepts
+
+```{r}
+inter_both <- (
+  fit_ind_both
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country,])
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+)
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 3.5
+(
+  ggplot(
+    data = inter_both,
+    aes(
+      xdist=country_mean,
+      y = country,
+      # fill = country,
+      # color = country
+    ),
+  )
+  + stat_halfeye(
+    color = col_palette[1],
+    fill = col_palette[2]
+  )
+  # + scale_fill_manual(
+  #   values = c(
+  #     "Zimbabwe" = col_palette[2],
+  #     "Lesotho" = col_palette[4],
+  #     "Mozambique" = col_palette[6]
+  #   )
+  # )
+  # + scale_color_manual(
+  #   values = c(
+  #     "Zimbabwe" = col_palette[1],
+  #     "Lesotho" = col_palette[3],
+  #     "Mozambique" = col_palette[5]
+  #   )
+  # )
+  + scale_x_continuous(
+    limits = c(0.018, 0.08),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Baseline Sexual Violence (%)",
+    y = "Country"
+  )
+  + guides(
+    fill = "none",
+    color = "none"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+ggsave(file.path(fig_dir, "baseline_sex_violence_ind_mod_abs_both.png"))
+```
+
+###### Slopes
+
+```{r}
+post_samples <- (
+  as_draws_df(
+    fit_ind_both, variable = c("^b_", "^r_"), regex = TRUE
+  )
+  %>% as_tibble()
+  %>% select(
+    -c(b_Intercept, .chain, .iteration, .draw, contains("r_country"))
+  )
+  %>% mutate(
+    sample = row_number()
+  )
+  %>% pivot_longer(
+    cols = -sample,
+    names_to = "parameter",
+    values_to = "value"
+  )
+)
+
+param_order <- (
+  post_samples
+  %>% group_by(parameter)
+  %>% summarise(
+    med_value = median(value)
+  )
+  %>% arrange(med_value)
+  %>% pull(parameter)
+)
+
+post_samples$parameter <- factor(post_samples$parameter, levels = param_order)
+  
+```
+
+```{r}
+#| fig-width: 6
+#| fig-height: 4
+
+(
+  post_samples
+  %>% ggplot(
+    aes(
+      x = value,
+      y = parameter,
+      height = ..density..
+    )
+  )
+  + ggridges::geom_density_ridges(
+    scale = 1,
+    rel_min_height = 0.01,
+    fill = col_palette[2],
+    alpha = 0.8,
+    color = col_palette[1]
+  )
+  + labs(
+    x = "Posterior value",
+    y = NULL,
+    title = "KDE of parameters' posterior distribution"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, vjust = 2),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+  + scale_y_discrete(
+    labels = c(
+      "b_no_education" = "No Education",
+      "b_utci" = "UTCI",
+      "b_rural" = "Rural",
+      "b_married" = "Married",
+      "r_rural[0,utci]" = expression(paste(Delta, "UTCI(rural = 0)")),
+      "r_rural[1,utci]" = expression(paste(Delta, "UTCI(rural = 1)"))
+    )
+  )
+  + expand_limits(y = length(unique(post_samples_dev$parameter)) + 1)
+  + scale_x_continuous(
+    limits = c(-0.8, 0.7)
+  )
+)
+ggsave(
+  file.path(
+    fig_dir, "parameters_ind_mod_both.png"
+  )
+)
+```
+
+```{r}
+ppreds <- posterior_predict(fit_ind_both, ndraws = 500)
+rownames(ppreds) <- 1:nrow(ppreds)
+df_ppreds <- (
+  as_tibble(t(ppreds))
+  %>% bind_cols(
+    country = df_model_ind_both$country,
+    rural = df_model_ind_both$rural,
+    married = df_model_ind_both$married,
+    no_education = df_model_ind_both$no_education,
+    utci = df_model_ind_both$utci
+  )
+  %>% pivot_longer(
+    -(country:utci),
+    names_to = "sample",
+    values_to = "sv_pred"
+  )
+)
+```
+
+###### Conditional effects
+
+```{r}
+#| fig-width: 7
+#| fig-height: 5
+
+low_lim <- 0.007
+high_lim <- 0.085
+
+p1 <- (
+  plot(
+    conditional_effects(
+      fit_ind_both, 
+      effects = "married",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[2], alpha = 1)
+  + geom_line(color = col_palette[1], linewidth = 1.2)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Married",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p2 <- (
+  plot(
+    conditional_effects(
+      fit_ind_both, 
+      effects = "no_education",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[2], alpha = 1)
+  + geom_line(color = col_palette[1], linewidth = 1.2)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "No Education",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p3 <- (
+  plot(
+    conditional_effects(
+      fit_ind_both, 
+      effects = "rural",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[2], alpha = 1)
+  + geom_line(color = col_palette[1], linewidth = 1.2)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Rural",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p4 <- (
+  plot(
+    conditional_effects(
+      fit_ind_both, 
+      effects = "utci",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[2], alpha = 1)
+  + geom_line(color = col_palette[1], linewidth = 1.2)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "# days above UTCI threshold\n(scaled)",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+(
+  (p1|p2) /
+  (p3|p4)
+  + plot_layout(
+    axes = "collect_y"
+  )
+)
+
+ggsave(
+  file.path(fig_dir, "conditional_effects_ind_mod_abs.png")
+)
+```
+
+### Deviation UTCI
+
+```{r}
+fit_ind_dev_both <- brm(
+  sv_any_12m ~ (
+    1 
+    + married 
+    + no_education 
+    # + poor
+    + rural
+    # + log_pop_density
+    + dev_utci
+    + (1|country)
+    + (0 + dev_utci| rural)
+    # + (1 + dev_utci||country/cluster)
+  ),
+  family = bernoulli("logit"),
+  prior = c(
+    prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(0, 0.2), class = "b"),
+    prior(normal(0, 0.2), class = "sd")
+  ),
+  data = df_model_ind_both,
+  seed = seed,
+  # sample_prior = "only"
+)
+```
+
+#### Model Checks
+
+##### Prior Predictive
+
+```{r}
+pp_check(fit_ind_dev_both)
+```
+
+##### Model Output
+
+```{r}
+fit_ind_dev_both
+```
+
+```{r}
+mod_file <- file.path(mod_dir, "hier_country_cluster.stan")
+mod <- cmdstan_model(mod_file)
+```
+
+```{r}
+mod$print()
+```
+
+```{r}
+fit_ind <- mod$sample(
+  data = model_data_ind,
+  seed = seed,
+  chains = 4,
+  parallel_chains = 4,
+  refresh = 500
+)
+```
+
+##### Parameters Viz
+
+###### Intercepts
+
+```{r}
+inter_dev_both <- (
+  fit_ind_dev_both
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country,])
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+)
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 3.5
+(
+  ggplot(
+    mapping = aes(
+      xdist=country_mean,
+      y = country,
+      fill = country,
+      color = country
+    )
+  )
+  + stat_halfeye(
+    data = inter_both,
+    color = col_palette[1],
+    fill = col_palette[2]
+  )
+  + stat_halfeye(
+    data = inter_dev_both,
+    color = col_palette[7],
+    fill = col_palette[8],
+    alpha = 0.6
+  )
+  # + scale_fill_manual(
+  #   values = c(
+  #     "Zimbabwe" = col_palette[2],
+  #     "Lesotho" = col_palette[4],
+  #     "Mozambique" = col_palette[6]
+  #   )
+  # )
+  # + scale_color_manual(
+  #   values = c(
+  #     "Zimbabwe" = col_palette[1],
+  #     "Lesotho" = col_palette[3],
+  #     "Mozambique" = col_palette[5]
+  #   )
+  # )
+  + scale_x_continuous(
+    limits = c(0.018, 0.08),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Baseline Sexual Violence (%)",
+    y = "Country"
+  )
+  + guides(
+    fill = "none",
+    color = "none"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+ggsave(file.path(fig_dir, "baseline_sex_violence_ind_mod_dev_both.png"))
+```
+
+###### Slopes
+
+```{r}
+post_samples_dev <- (
+  as_draws_df(
+    fit_ind_dev_both, variable = c("^b_", "^r_"), regex = TRUE
+  )
+  %>% as_tibble()
+  %>% select(
+    -c(b_Intercept, .chain, .iteration, .draw, contains("r_country"))
+  )
+  %>% mutate(
+    sample = row_number()
+  )
+  %>% pivot_longer(
+    cols = -sample,
+    names_to = "parameter",
+    values_to = "value"
+  )
+  %>% mutate(
+    parameter = recode(
+      parameter,
+      "b_dev_utci" = "b_utci",
+      "r_rural[0,dev_utci]" = "r_rural[0,utci]",
+      "r_rural[1,dev_utci]" = "r_rural[1,utci]"
+    )
+  )
+)
+
+param_order <- (
+  post_samples_dev
+  %>% group_by(parameter)
+  %>% summarise(
+    med_value = median(value)
+  )
+  %>% arrange(med_value)
+  %>% pull(parameter)
+)
+
+post_samples_dev$parameter <- factor(post_samples_dev$parameter, levels = param_order)
+  
+```
+
+```{r}
+#| fig-width: 6.11
+#| fig-height: 4
+
+(
+  post_samples_dev
+  %>% ggplot(
+    aes(
+      x = value,
+      y = parameter,
+      height = ..density..
+    )
+  )
+  + ggridges::geom_density_ridges(
+    scale = 1,
+    rel_min_height = 0.01,
+    fill = col_palette[7],
+    alpha = 0.8,
+    color = col_palette[8]
+  )
+  + labs(
+    x = "Posterior value",
+    y = NULL,
+    title = "KDE of parameters' posterior distribution"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, vjust = 2),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+  # + scale_y_discrete(
+  #   labels = c(
+  #     "b_no_education" = "No Education",
+  #     "b_dev_utci" = expression(paste(delta, "UTCI")),
+  #     "b_rural" = "Rural",
+  #     "b_married" = "Married",
+  #     "r_rural[0,dev_utci]" = expression(paste(Delta, delta, "UTCI(rural = 0)")),
+  #     "r_rural[1,dev_utci]" = expression(paste(Delta, delta, "UTCI(rural = 1)"))
+  #   )
+  # )
+  + scale_y_discrete(
+    labels = c(
+      "b_no_education" = "No Education",
+      "b_utci" = "UTCI",
+      "b_rural" = "Rural",
+      "b_married" = "Married",
+      "r_rural[0,utci]" = expression(paste(Delta, "UTCI(rural = 0)")),
+      "r_rural[1,utci]" = expression(paste(Delta, "UTCI(rural = 1)"))
+    )
+  )
+  + expand_limits(y = length(unique(post_samples_dev$parameter)) + 1)
+  + scale_x_continuous(
+    limits = c(-1, 0.7)
+  )
+)
+ggsave(
+  file.path(
+    fig_dir, "parameters_ind_mod_dev_both.png"
+  )
+)
+```
+
+```{r}
+#| fig-width: 6
+#| fig-height: 4
+
+(
+  ggplot(
+    mapping = aes(
+      x = value,
+      y = parameter,
+      height = ..density..
+    )
+  )
+  + ggridges::geom_density_ridges(
+    data = post_samples,
+    scale = 1,
+    rel_min_height = 0.01,
+    fill = col_palette[2],
+    alpha = 0.5,
+    color = col_palette[1]
+  )
+  + ggridges::geom_density_ridges(
+    data = post_samples_dev,
+    scale = 1,
+    rel_min_height = 0.01,
+    fill = col_palette[8],
+    alpha = 0.5,
+    color = col_palette[7]
+  )
+  + labs(
+    x = "Posterior value",
+    y = NULL,
+    title = "KDE of parameters' posterior distribution"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, vjust = 2),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+  + scale_y_discrete(
+    labels = c(
+      "b_no_education" = "No Education",
+      "b_utci" = "UTCI",
+      "b_rural" = "Rural",
+      "b_married" = "Married",
+      "r_rural[0,utci]" = expression(paste(Delta, "UTCI(rural = 0)")),
+      "r_rural[1,utci]" = expression(paste(Delta, "UTCI(rural = 1)"))
+    )
+  )
+  + expand_limits(y = length(unique(post_samples_dev$parameter)) + 1)
+  + scale_x_continuous(
+    limits = c(-0.8, 0.7)
+  )
+)
+ggsave(
+  file.path(
+    fig_dir, "parameters_ind_mod_dev_both_test.png"
+  )
+)
+```
+
+```{r}
+ppreds <- posterior_predict(fit_ind_both, ndraws = 500)
+rownames(ppreds) <- 1:nrow(ppreds)
+df_ppreds <- (
+  as_tibble(t(ppreds))
+  %>% bind_cols(
+    country = df_model_ind_both$country,
+    rural = df_model_ind_both$rural,
+    married = df_model_ind_both$married,
+    no_education = df_model_ind_both$no_education,
+    utci = df_model_ind_both$utci
+  )
+  %>% pivot_longer(
+    -(country:utci),
+    names_to = "sample",
+    values_to = "sv_pred"
+  )
+)
+```
+
+###### Conditional effects
+
+```{r}
+#| fig-width: 7
+#| fig-height: 5
+
+low_lim <- 0.007
+high_lim <- 0.085
+
+p1 <- (
+  plot(
+    conditional_effects(
+      fit_ind_dev_both, 
+      effects = "married",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_line(color = col_palette[7], linewidth = 1.2)
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[8], alpha = 0.4)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Married",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p2 <- (
+  plot(
+    conditional_effects(
+      fit_ind_dev_both, 
+      effects = "no_education",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_line(color = col_palette[7], linewidth = 1.2)
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[8], alpha = 0.4)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "No Education",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p3 <- (
+  plot(
+    conditional_effects(
+      fit_ind_dev_both, 
+      effects = "rural",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_line(color = col_palette[7], linewidth = 1.2)
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[8], alpha = 0.4)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Rural",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+p4 <- (
+  plot(
+    conditional_effects(
+      fit_ind_dev_both, 
+      effects = "dev_utci",
+      plot = FALSE
+    ),
+    plot = FALSE
+  )[[1]]
+  + geom_line(color = col_palette[7], linewidth = 1.2)
+  + geom_ribbon(aes(ymin = lower__, ymax = upper__), fill = col_palette[8], alpha = 0.4)
+  + scale_y_continuous(
+    limits = c(low_lim, high_lim),
+    labels = scales::percent
+  )
+  + labs(
+    x = "dev. days above UTCI threshold\n(scaled)",
+    y = "Sexual Violence (%)"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+(
+  (p1|p2) /
+  (p3|p4)
+  + plot_layout(
+    axes = "collect_y"
+  )
+)
+
+ggsave(
+  file.path(fig_dir, "conditional_effects_ind_mod_dev.png")
+)
+```
