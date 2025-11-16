@@ -25,7 +25,6 @@ seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8
 set.seed(seed)
 ```
 
-
 # Import data
 
 ## Climate
@@ -64,7 +63,6 @@ df_viol <- (
 )
 ```
 
-
 # Combine datasets
 
 ```{r}
@@ -89,7 +87,6 @@ df_viol <- (
 # )
 ```
 
-
 ```{r}
 df_clim_viol <- (
   df_viol
@@ -107,18 +104,46 @@ df_clim_viol <- (
 ```
 
 ```{r}
+col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
+(
+  ggplot(
+    data = df_clim_viol, 
+    aes(
+      x = dev_value_utci_days_above_32_daily_max_sum_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    position = "stack"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_manual(
+    values = col_palette
+  )
+)
+```
+
+```{r}
 (
   df_clim_viol
   %>% filter(is.na(dev_value_spei_above_85q_sum_12m))
 )
 ```
 
-
 ```{r}
 df_clim_viol %>% write_csv(file.path(proc_data_dir, "climate_violence_new_vacs.csv"))
 ```
-
-
-
-
-

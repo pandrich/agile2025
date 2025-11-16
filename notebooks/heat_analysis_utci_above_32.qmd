@@ -487,6 +487,72 @@ pp_check(fit_fem_all_viol)
 fit_fem_all_viol
 ```
 
+###### Baseline Levels
+
+```{r}
+inter_fem_all_viol <- (
+  fit_fem_all_viol
+  %>% as_draws_rvars()
+  %>% spread_rvars(b_Intercept, r_country[country, 1])
+  %>% filter(`1` == "Intercept")
+  %>% select(-c(`1`))
+  %>% mutate(
+    country_mean_lat = (b_Intercept + r_country),
+    country_mean = 1 / (1 + exp(-country_mean_lat))
+  )
+)
+```
+
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 3.5
+(
+  ggplot(
+    data = inter_fem_all_viol,
+    aes(
+      xdist=country_mean,
+      y = fct_reorder(country,country_mean, .fun = "median")
+      # fill = country,
+      # color = country
+    ),
+  )
+  + stat_halfeye(
+    color = "black",
+    fill = col_palette[2],
+    adjust = 1.0,
+  )
+  + scale_x_continuous(
+    limits = c(0.018, 0.17),
+    labels = scales::percent
+  )
+  + labs(
+    x = "Baseline Sexual Violence (%)",
+    y = "Country"
+  )
+  + guides(
+    fill = "none",
+    color = "none"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+)
+
+ggsave(file.path(fig_dir, "baseline_sex_violence_fem_all_viol.png"))
+```
+
 #### Random Effects
 
 ```{r}
@@ -557,7 +623,6 @@ df_ranef_fem_all_viol_summary <- (
 )
 
 ```
-
 
 #### Posterior Predictive Checks
 

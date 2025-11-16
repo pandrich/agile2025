@@ -388,7 +388,6 @@ vacs_moz <- (
 )
 ```
 
-
 ## Zimbabwe
 
 Zimbabwe potentially has a finer spatial resolution that we could use Which one is the cluster variable?
@@ -1319,7 +1318,6 @@ vacs_nam <- (
 )
 ```
 
-
 ## Zambia
 
 I believe that `region` indicates if the region is rural or urban. I'm guessing 1 = urban and 2 = rural Why are there 30 sex variables???
@@ -1340,7 +1338,6 @@ vacs_zmbf <- (
   )
 )
 ```
-
 
 ### Male
 
@@ -1632,7 +1629,6 @@ vacs_zmb <- (
 )
 ```
 
-
 df# Combine
 
 ```{r}
@@ -1651,4 +1647,3 @@ df_vacs %>% write_csv(file.path(proc_data_dir, paste0("vacs_clean_", date, ".csv
   )
 )
 ```
-
