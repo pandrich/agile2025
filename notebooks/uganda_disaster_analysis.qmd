@@ -192,35 +192,35 @@ commodities_to_plot <- c("Maize (white)", "Maize flour", "Cassava flour", "Sorgh
 Data from: https://data.humdata.org/dataset/cod-ab-uga
 
 ```{r load_data geom}
-sf_uga <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
-    layer = "uga_admbnda_adm2_ubos_20200824"
-  )
-  %>% rename_with(tolower)
-  %>% st_make_valid()
-  %>% st_simplify(
-    dTolerance = 100
-  )
-  %>% mutate(
-    id = row_number(),
-    admin2name_en = case_when(
-      admin2name_en == "Madi Okollo" ~ "Madi-Okollo",
-      admin2name_en == "Ssembabule" ~ "Sembabule",
-      .default = admin2name_en
-    )
-  )
-  # %>% select(
-  #   id,
-  #   adm1_name = admin1name_en,
-  #   adm2_name = admin2name_en,
-  #   adm2_pcode = admin2pcode,
-  #   # adm3_name = admin3name_en,
-  #   # adm4_name = admin4name_en,
-  #   # adm4_pcode = admin4pcode,
-  #   geometry = shape
-  # )
-)
+# sf_uga <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+#     layer = "uga_admbnda_adm2_ubos_20200824"
+#   )
+#   %>% rename_with(tolower)
+#   %>% st_make_valid()
+#   %>% st_simplify(
+#     dTolerance = 100
+#   )
+#   %>% mutate(
+#     id = row_number(),
+#     admin2name_en = case_when(
+#       admin2name_en == "Madi Okollo" ~ "Madi-Okollo",
+#       admin2name_en == "Ssembabule" ~ "Sembabule",
+#       .default = admin2name_en
+#     )
+#   )
+#   # %>% select(
+#   #   id,
+#   #   adm1_name = admin1name_en,
+#   #   adm2_name = admin2name_en,
+#   #   adm2_pcode = admin2pcode,
+#   #   # adm3_name = admin3name_en,
+#   #   # adm4_name = admin4name_en,
+#   #   # adm4_pcode = admin4pcode,
+#   #   geometry = shape
+#   # )
+# )
 ```
 
 ```{r}
@@ -238,9 +238,9 @@ sf_uga <- (
 
 From data sent by Herbert
 
-```{r}
-Sys.setenv(SHAPE_RESTORE_SHX='YES')
-sf_uga_herb <- (
+```{r load_data geom}
+# Sys.setenv(SHAPE_RESTORE_SHX='YES')
+sf_uga <- (
   st_read(
     file.path(
       raw_data_dir,
@@ -249,6 +249,11 @@ sf_uga_herb <- (
       "uganda_districts.shp"
     ),
   )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = str_to_title(district)
+  )
+  %>% select(district)
 )
 ```
 
@@ -326,12 +331,6 @@ Data from: https://hub.worldpop.org/geodata/listing?id=136
 ```
 
 
-Include operational presence?
-
-
-## Poverty
-
-
 ## Displacement
 
 https://data.humdata.org/dataset/uga-iom-dtm-from-api
@@ -356,7 +355,123 @@ df_disp <- (
 )
 ```
 
+## Crop cycles
+
+```{r}
+df_crops <- (
+  read_csv(
+    file.path(
+      raw_data_dir, 
+      "crop",
+      "harvestStat",
+      "hvstat_africa_data_v1.0.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country %in% c("Uganda"),
+    qc_flag == 0,
+    product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
+    !is.na(production),
+    harvest_year >= 2000
+  )
+  %>% group_by(country, admin_1, harvest_year)
+  %>% slice_max(
+    order_by = production,
+    n = 1,
+    with_ties = FALSE,
+  )
+  %>% ungroup()
+  %>% mutate(
+    planting_date = make_date(year = planting_year, month = planting_month, day = 1),
+    harvest_date = make_date(year = harvest_year, month = harvest_month, day = 1),
+  )
+  %>% rowwise()
+  %>% mutate(
+    date = list(
+      seq(
+        from = planting_date,
+        to = harvest_date,
+        by = "month"
+      )
+    )
+  )
+  %>% unnest(date)
+  %>% ungroup()
+  %>% mutate(
+    date = ceiling_date(date, unit = "month") - days()
+  )
+  %>% select(
+    country,
+    adm1_name = admin_1,
+    date
+  )
+  %>% mutate(
+    crop_season = 1
+  )
+)
+```
+
+## Food Prices
+
+Data from: https://data.humdata.org/dataset/global-wfp-food-prices
+
+```{r load data food prices}
+food_prices_files <- list.files(file.path(raw_data_dir, "food_prices", "wfp_food_prices", fsep = "/"))
+list_food_prices <- list()
+for (i in seq(length(food_prices_files))) {
+  list_food_prices[[i]] <- (
+    read_csv(
+      file.path(raw_data_dir, "food_prices", "wfp_food_prices", food_prices_files[i], fsep = "/"),
+      show_col_types = FALSE
+    )
+    %>% filter(
+    # category == "cereals and tubers"
+      pricetype == "Retail",
+      !is.na(latitude),
+      category %in% c("cereals and tubers", "pulses and nuts", "vegetables and fruits")
+    )
+    %>% mutate(
+      admin2 = str_replace(admin2, " Municipality", "")
+    )
+  )
+}
+```
+
+```{r}
+sf_food_prices_wfp_uga <- (
+  bind_rows(list_food_prices)
+  %>% filter(
+    countryiso3 == "UGA"
+  )
+  %>% select(
+    date,
+    admin1,
+    admin2,
+    market,
+    latitude,
+    longitude,
+    category,
+    commodity,
+    unit,
+    price
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    price = as.numeric(price)
+  )
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+)
+```
+
 ## Crop and Rangeland Warnings
+
+data from: https://data.jrc.ec.europa.eu/collection/id-0112
 
 ```{r}
 df_crop_warn <- (
@@ -435,6 +550,14 @@ df_fs <- (
 ```
 
 
+## Malnutrition
+
+```{r}
+df_maln <- 
+```
+
+
+
 ## NDVI 
 
 https://data.humdata.org/dataset/uga-ndvi-subnational
@@ -491,62 +614,7 @@ df_spei <- (
 ```
 
 
-## Crop cycles
 
-```{r}
-df_crops <- (
-  read_csv(
-    file.path(
-      raw_data_dir, 
-      "crop",
-      "harvestStat",
-      "hvstat_africa_data_v1.0.csv"
-    ),
-    show_col_types = FALSE
-  )
-  %>% filter(
-    country %in% c("Uganda"),
-    qc_flag == 0,
-    product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
-    !is.na(production),
-    harvest_year >= 2000
-  )
-  %>% group_by(country, admin_1, harvest_year)
-  %>% slice_max(
-    order_by = production,
-    n = 1,
-    with_ties = FALSE,
-  )
-  %>% ungroup()
-  %>% mutate(
-    planting_date = make_date(year = planting_year, month = planting_month, day = 1),
-    harvest_date = make_date(year = harvest_year, month = harvest_month, day = 1),
-  )
-  %>% rowwise()
-  %>% mutate(
-    date = list(
-      seq(
-        from = planting_date,
-        to = harvest_date,
-        by = "month"
-      )
-    )
-  )
-  %>% unnest(date)
-  %>% ungroup()
-  %>% mutate(
-    date = ceiling_date(date, unit = "month") - days()
-  )
-  %>% select(
-    country,
-    adm1_name = admin_1,
-    date
-  )
-  %>% mutate(
-    crop_season = 1
-  )
-)
-```
 
 ## Harvest Locations (2025-06-09)
 
@@ -1071,62 +1139,7 @@ df_dis_iom <- (
 df_dis_iom
 ```
 
-## Food Prices
 
-Data from: https://data.humdata.org/dataset/global-wfp-food-prices
-
-```{r load data food prices}
-food_prices_files <- list.files(file.path(raw_data_dir, "food_prices", "wfp_food_prices", fsep = "/"))
-list_food_prices <- list()
-for (i in seq(length(food_prices_files))) {
-  list_food_prices[[i]] <- (
-    read_csv(
-      file.path(raw_data_dir, "food_prices", "wfp_food_prices", food_prices_files[i], fsep = "/"),
-      show_col_types = FALSE
-    )
-    %>% filter(
-    # category == "cereals and tubers"
-      pricetype == "Retail",
-      !is.na(latitude),
-      category %in% c("cereals and tubers", "pulses and nuts", "vegetables and fruits")
-    )
-    %>% mutate(
-      admin2 = str_replace(admin2, " Municipality", "")
-    )
-  )
-}
-```
-
-```{r}
-sf_food_prices_wfp_uga <- (
-  bind_rows(list_food_prices)
-  %>% filter(
-    countryiso3 == "UGA"
-  )
-  %>% select(
-    date,
-    admin1,
-    admin2,
-    market,
-    latitude,
-    longitude,
-    category,
-    commodity,
-    unit,
-    price
-  )
-  %>% mutate(
-    date = as.Date(date, format = "%Y-%m-%d"),
-    latitude = as.numeric(latitude),
-    longitude = as.numeric(longitude),
-    price = as.numeric(price)
-  )
-  %>% st_as_sf(
-    coords = c("longitude", "latitude"),
-    crs = 4326
-  )
-)
-```
 
 ## DHIS2 Data
 

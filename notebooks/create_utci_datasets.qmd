@@ -106,14 +106,14 @@ build_utci_ts_country <- function(iso3, rast_pop, adm_pop, adm_shapes) {
       dfs[[i]] <- adm_utci_month
       (
         bind_rows(dfs) 
-        %>% rename(id = ID)
+        %>% rename(adm_code = ID)
         %>% write_csv(file.path(proc_data_dir, paste0("utci_", iso3, ".csv")))
       )
     }
   }
   df <- (
     bind_rows(dfs)
-    %>% rename(id = ID)
+    %>% rename(adm_code = ID)
   )
   df %>% write_csv(file.path(proc_data_dir, paste0("utci_", iso3, ".csv")))
   df
@@ -207,25 +207,51 @@ sf_zmb <- (
 ### Uganda
 
 ```{r}
+# sf_uga <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+#     layer = "uga_admbnda_adm2_ubos_20200824"
+#   )
+#   %>% rename_with(tolower)
+#   %>% mutate(
+#     id = row_number()
+#   )
+#   %>% select(
+#     id,
+#     adm1_name = admin1name_en,
+#     adm2_name = admin2name_en,
+#     adm2_pcode = admin2pcode,
+#     # adm3_name = admin3name_en,
+#     # adm4_name = admin4name_en,
+#     # adm4_pcode = admin4pcode,
+#     geometry = shape
+#   )
+# )
 sf_uga <- (
   st_read(
-    file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
-    layer = "uga_admbnda_adm2_ubos_20200824"
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
   )
   %>% rename_with(tolower)
+  # %>% mutate(
+  #   district = str_to_title(district)
+  # )
   %>% mutate(
-    id = row_number()
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
   )
   %>% select(
-    id,
-    adm1_name = admin1name_en,
-    adm2_name = admin2name_en,
-    adm2_pcode = admin2pcode,
-    # adm3_name = admin3name_en,
-    # adm4_name = admin4name_en,
-    # adm4_pcode = admin4pcode,
-    geometry = shape
+    id = objectid,
+    adm2_name = district
   )
+  %>% st_transform(4326)
 )
 ```
 
@@ -234,12 +260,12 @@ sf_uga <- (
 ```{r}
 sf_ken <- (
   st_read(
-    file.path(raw_data_dir, "geographies", "ken_adm_iebc_20191031_shp", "ken_admbnda_adm1_iebc_20191031.shp")
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
   )
   %>% rename_with(tolower)
   %>% select(
-    adm1_name = adm1_en,
-    adm1_code = adm1_pcode
+    adm1_name = dhsregen,
+    adm1_code = regcode
   )
   %>% arrange(adm1_code)
 )

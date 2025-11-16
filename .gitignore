@@ -10,6 +10,7 @@
 # Ignore ref folders
 __pycache__/
 cache/
+.ipynb_checkpoints/
 
 # Ignore data folders
 data/

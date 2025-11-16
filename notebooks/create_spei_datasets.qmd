@@ -123,7 +123,7 @@ build_spei_ts_country <- function(iso3, spei_rast, pop_rast, adm_pop, adm_shapes
   }
   df <- (
     bind_rows(dfs)
-    %>% rename(id = ID)
+    %>% rename(adm1_code = ID)
   )
   df %>% write_csv(file.path(proc_data_dir, paste0("spei_", iso3, ".csv")))
   df
@@ -254,7 +254,6 @@ sf_ken <- (
   %>% arrange(adm1_code)
 )
 ```
-
 
 ## Population
 
@@ -489,8 +488,6 @@ adm_pop_ken_2022 <- (
 )
 ```
 
-
-
 ## SPEI
 
 Data obtained using the Climate Data Store API
@@ -519,7 +516,7 @@ spei_moz_poly <- (
 )
 ```
 
-#### UTCI Grid
+#### SPEI Grid
 
 ```{r}
 (
@@ -562,7 +559,7 @@ ggsave(
 )
 ```
 
-#### UTCI Grid Zoom In
+#### SPEI Grid Zoom In
 
 ```{r}
 #| fig-width: 5
@@ -622,7 +619,7 @@ ggsave(
 )
 ```
 
-#### UTCI times population
+#### SPEI times population
 
 ```{r}
 pop_sum <- (
@@ -716,7 +713,7 @@ ggsave(
 )
 ```
 
-#### Weighted UTCI
+#### Weighted SPEI
 
 ```{r}
 adm1_spei_month <- (

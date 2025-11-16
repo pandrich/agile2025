@@ -155,12 +155,12 @@ sf_zmb <- (
 ```{r}
 sf_ken <- (
   st_read(
-    file.path(raw_data_dir, "geographies", "ken_adm_iebc_20191031_shp", "ken_admbnda_adm1_iebc_20191031.shp")
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
   )
   %>% rename_with(tolower)
   %>% select(
-    adm1_name = adm1_en,
-    adm1_code = adm1_pcode
+    adm1_name = dhsregen,
+    adm1_code = regcode
   )
   %>% arrange(adm1_code)
 )
@@ -245,7 +245,7 @@ df_utci_zmb <- (
 ### Kenya
 
 ```{r}
-df_utci_zmb <- (
+df_utci_ken <- (
   read_csv(
     file.path(proc_data_dir, "utci_KEN.csv"),
     show_col_types = FALSE
@@ -253,6 +253,7 @@ df_utci_zmb <- (
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
   )
+  %>% rename(adm1_code = id)
 )
 ```
 
@@ -275,7 +276,8 @@ df_crops <- (
     qc_flag == 0,
     product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes"),
     !is.na(production),
-    harvest_year >= 2000
+    harvest_year >= 2000,
+    !(season_name %in% c("Annual", "Short"))
   )
   %>% group_by(country, admin_1, harvest_year)
   %>% slice_max(
@@ -313,6 +315,7 @@ df_crops <- (
   )
 )
 ```
+
 
 ```{r}
 (
@@ -677,17 +680,25 @@ df_clim_adm1_roll <- (
     )
   )
   %>% filter(!is.na(spei_mean_12m))
-  %>% select(country, adm1_code, adm1_name, log_pop_density, date, crop_season, n_crop_months, spei_crop_sum_temp, dist_from_last_crop_season, contains("12m"))
+  %>% select(country, adm1_code, adm1_name, log_pop_density, date, dist_from_last_crop_season, contains("12m"))
 )
 ```
 
+
 ```{r}
 (
-  df_clim_adm1_roll
-  # %>% filter(is.na(spei_crop_sum_temp))
-  %>% filter(spei_crop_sum_temp == 0)
+  ggplot(
+    data = df_clim_adm1_roll, 
+    aes(
+      x = utci_days_above_32_daily_max_sum_12m, 
+      color = country, 
+      fill = country
+    )
+  )
+  + geom_histogram()
 )
 ```
+
 
 ## Calculate deviations from average
 
