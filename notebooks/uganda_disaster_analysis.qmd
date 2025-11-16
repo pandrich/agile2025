@@ -62,7 +62,7 @@ clean_column_name <- function(cols) {
   cols
 }
 
-load_dhis_data <- function(filename) {
+load_dhis_viol_data <- function(filename) {
   filepath <- file.path(raw_data_dir, "Uganda", "DHIS2", filename)
   sheet_names <- excel_sheets(filepath)
   dfs <- list()
@@ -78,13 +78,14 @@ load_dhis_data <- function(filename) {
   
     df_dhis <- (
       read_xlsx(
-        file.path(raw_data_dir, "Uganda", "DHIS2", "DHIS2_GBV_Data.xlsx"),
+        file.path(raw_data_dir, "Uganda", "DHIS2", filename),
         sheet = sheet_names[i],
         skip = 5,
         col_names = FALSE,
         .name_repair = "unique_quiet"
       )
       %>% select(-last_col())
+      %>% head(-1)
     )
     colnames(df_dhis) <- combined_names
   
@@ -109,7 +110,84 @@ load_dhis_data <- function(filename) {
       )
     )
   }
-  bind_rows(dfs)
+  (
+    bind_rows(dfs)
+    %>% mutate(
+      district = str_squish(str_remove_all(district, "District")),
+      date = lubridate::ceiling_date(
+        as.Date(paste(year, month, "01", sep="-"), "%Y-%B-%d"),
+        "month"
+      ) - lubridate::days(1),
+      cases = replace_na(cases, 0)
+    )
+    # %>% group_by(district, date, variable, sex, age_bracket)
+    # %>% summarise(
+    #   cases = sum(cases, na.rm = TRUE),
+    #   .groups = "drop"
+    # )
+    %>% arrange(district, date, variable, sex, age_bracket)
+  )
+}
+
+load_dhis_maln_data <- function(filename) {
+  filepath <- file.path(raw_data_dir, "Uganda", "DHIS2", filename)
+  sheet_names <- excel_sheets(filepath)
+  dfs <- list()
+  for (i in 1:length(sheet_names)) {
+    dhis_raw <- read_xlsx(
+      file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+      sheet = sheet_names[i],
+      col_names = FALSE,
+      .name_repair = "unique_quiet"
+    )
+    headers <- as_tibble(t(zoo::na.locf(t(dhis_raw[1:2, 1:(dim(dhis_raw)[2] -1)]))))
+    combined_names <- apply(headers, 2, function(x) paste(x, collapse = "_"))
+  
+    df_dhis <- (
+      read_xlsx(
+        file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+        sheet = sheet_names[i],
+        skip = 2,
+        col_names = FALSE,
+        .name_repair = "unique_quiet"
+      )
+      %>% select(-last_col())
+    )
+    colnames(df_dhis) <- combined_names
+  
+    dfs[[i]] <- (
+      df_dhis
+      %>% rename(
+        district = "Data element_District/Month"
+      )
+      %>% pivot_longer(
+        cols = -district,
+        names_to = c("variable", "month"),
+        names_sep = "_",
+        values_to = "cases"
+      )
+      %>% mutate(
+        year = sheet_names[i],
+        # sex = if_else(
+        #   variable == "Abortions due to Gender-Based Violence",
+        #   "Female",
+        #   sex
+        # )
+      )
+    )
+  }
+  (
+    bind_rows(dfs)
+    %>% mutate(
+      district = str_squish(str_remove_all(district, "District")),
+      date = lubridate::ceiling_date(
+        as.Date(paste(year, month, "01", sep="-"), "%Y-%B-%d"),
+        "month"
+      ) - lubridate::days(1),
+      cases = replace_na(cases, 0)
+    )
+    %>% arrange(district, date, variable)
+  )
 }
 ```
 
@@ -250,8 +328,15 @@ sf_uga <- (
     ),
   )
   %>% rename_with(tolower)
+  # %>% mutate(
+  #   district = str_to_title(district)
+  # )
   %>% mutate(
-    district = str_to_title(district)
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
   )
   %>% select(district)
 )
@@ -330,30 +415,6 @@ Data from: https://hub.worldpop.org/geodata/listing?id=136
 # )
 ```
 
-
-## Displacement
-
-https://data.humdata.org/dataset/uga-iom-dtm-from-api
-
-```{r}
-disp_cols <- (
-  read_csv(
-    file.path(raw_data_dir, "migration", "uga-iom-dtm-from-api-admin-0-to-2.csv"),
-    show_col_types = FALSE,
-    n_max = 0
-  )
-  %>% names()
-)
-
-df_disp <- (
-  read_csv(
-    file.path(raw_data_dir, "migration", "uga-iom-dtm-from-api-admin-0-to-2.csv"),
-    show_col_types = FALSE,
-    col_names = disp_cols,
-    skip = 2
-  )
-)
-```
 
 ## Crop cycles
 
@@ -553,7 +614,7 @@ df_fs <- (
 ## Malnutrition
 
 ```{r}
-df_maln <- 
+df_maln <- load_dhis_maln_data("Nutrition_Data.xlsx")
 ```
 
 
@@ -596,6 +657,7 @@ df_utci <- (
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
   )
+  %>% rename(district = id)
 )
 ```
 
@@ -610,348 +672,11 @@ df_spei <- (
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
   )
+  %>% rename(district = id)
 )
 ```
 
 
-
-
-## Harvest Locations (2025-06-09)
-
-https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/SWPENT
-
-### Rice
-
-```{r}
-sf_glo_h_rice_rainfed <- (
-  terra::rast(
-    x = file.path(
-      raw_data_dir, 
-      "crop",
-      "spam_disaggregated_crop_data",
-      "spam2020_global",
-      "Global_Geotiff",
-      "spam2020V2r0_global_harvested_area",
-      "spam2020_V2r0_global_H_RICE_R.tif"
-    ),
-  )
-  %>% terra::crop(st_union(sf_uga))
-)
-```
-
-```{r}
-#| fig-width: 5
-#| fig-height: 5
-(
-  ggplot()
-  + geom_spatraster(
-    data = sf_glo_h_rice_rainfed,
-    mapping = aes(fill = spam2020_V2r0_global_H_RICE_R)
-  )
-  + scale_fill_paletteer_c(
-    "ggthemes::Orange",
-    na.value = "transparent"
-  )
-  + geom_sf(
-    data = sf_uga,
-    fill = NA,
-    color = "black",
-    # linewidth = 1.1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.background = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    legend.key.height = unit(50, "pt"),
-    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
-    legend.text = element_text(size = 14),
-    legend.background = element_blank(),
-    legend.title.position = "right",
-  )
-  + labs(
-    title = "Rainfed Rice Harvest Area",
-    fill = "Harvest Area (ha)"
-  )
-)
-ggsave(
-  file = "rice_harvest_rainfed.png",
-  path = fig_dir,
-  width = 6,
-  height = 5
-)
-```
-
-### Maize
-
-```{r}
-sf_glo_h_maize_rainfed <- (
-  terra::rast(
-    x = file.path(
-      raw_data_dir, 
-      "crop",
-      "spam_disaggregated_crop_data",
-      "spam2020_global",
-      "Global_Geotiff",
-      "spam2020V2r0_global_harvested_area",
-      "spam2020_V2r0_global_H_MAIZ_R.tif"
-    ),
-  )
-  %>% terra::crop(st_union(sf_uga))
-)
-```
-
-```{r}
-#| fig-width: 5
-#| fig-height: 5
-(
-  ggplot()
-  + geom_spatraster(
-    data = sf_glo_h_maize_rainfed,
-    mapping = aes(fill = spam2020_V2r0_global_H_MAIZ_R)
-  )
-  + scale_fill_paletteer_c(
-    "ggthemes::Orange",
-    na.value = "white",
-    direction = 1
-  )
-  + geom_sf(
-    data = sf_uga,
-    fill = NA,
-    color = "black",
-    # linewidth = 1.1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.background = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    legend.key.height = unit(50, "pt"),
-    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
-    legend.text = element_text(size = 14),
-    legend.background = element_blank(),
-    legend.title.position = "right",
-  )
-  + labs(
-    title = "Rainfed Maize Harvest Area",
-    fill = "Harvest Area (ha)"
-  )
-)
-ggsave(
-  file = "maize_harvest_rainfed.png",
-  path = fig_dir
-)
-```
-
-### Sorghum
-
-```{r}
-sf_glo_h_sorg_rainfed <- (
-  terra::rast(
-    x = file.path(
-      raw_data_dir, 
-      "crop",
-      "spam_disaggregated_crop_data",
-      "spam2020_global",
-      "Global_Geotiff",
-      "spam2020V2r0_global_harvested_area",
-      "spam2020_V2r0_global_H_SORG_R.tif"
-    ),
-  )
-  %>% terra::crop(st_union(sf_uga))
-)
-```
-
-```{r}
-#| fig-width: 5
-#| fig-height: 5
-(
-  ggplot()
-  + geom_spatraster(
-    data = sf_glo_h_sorg_rainfed,
-    mapping = aes(fill = spam2020_V2r0_global_H_SORG_R)
-  )
-  + scale_fill_paletteer_c(
-    "ggthemes::Orange",
-    na.value = "transparent",
-    direction = 1
-  )
-  + geom_sf(
-    data = sf_uga,
-    fill = NA,
-    color = "black",
-    # linewidth = 1.1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.background = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    legend.key.height = unit(50, "pt"),
-    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
-    legend.text = element_text(size = 14),
-    legend.background = element_blank(),
-    legend.title.position = "right",
-  )
-  + labs(
-    title = "Rainfed Sorghum Harvest Area",
-    fill = "Harvest Area (ha)"
-  )
-)
-ggsave(
-  file = "sorghum_harvest_rainfed.png",
-  path = fig_dir,
-  width = 6,
-  height = 5
-)
-```
-
-### Sweet Potatoes
-
-```{r}
-sf_glo_h_swpo_rainfed <- (
-  terra::rast(
-    x = file.path(
-      raw_data_dir, 
-      "crop",
-      "spam_disaggregated_crop_data",
-      "spam2020_global",
-      "Global_Geotiff",
-      "spam2020V2r0_global_harvested_area",
-      "spam2020_V2r0_global_H_SWPO_R.tif"
-    ),
-  )
-  %>% terra::crop(st_union(sf_uga))
-)
-```
-
-```{r}
-#| fig-width: 5
-#| fig-height: 5
-(
-  ggplot()
-  + geom_spatraster(
-    data = sf_glo_h_swpo_rainfed,
-    mapping = aes(fill = spam2020_V2r0_global_H_SWPO_R)
-  )
-  + scale_fill_paletteer_c(
-    "ggthemes::Orange",
-    na.value = "white",
-    direction = 1
-  )
-  + geom_sf(
-    data = sf_uga,
-    fill = NA,
-    color = "black",
-    # linewidth = 1.1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.background = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    legend.key.height = unit(50, "pt"),
-    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
-    legend.text = element_text(size = 14),
-    legend.background = element_blank(),
-    legend.title.position = "right",
-  )
-  + labs(
-    title = "Rainfed Sweet Potato Harvest Area",
-    fill = "Harvest Area (ha)"
-  )
-)
-ggsave(
-  file = "sweet_potato_harvest_rainfed.png",
-  path = fig_dir
-)
-```
-
-### Plantain
-
-```{r}
-sf_glo_h_plantain_rainfed <- (
-  terra::rast(
-    x = file.path(
-      raw_data_dir, 
-      "crop",
-      "spam_disaggregated_crop_data",
-      "spam2020_global",
-      "Global_Geotiff",
-      "spam2020V2r0_global_harvested_area",
-      "spam2020_V2r0_global_H_PLNT_R.tif"
-    ),
-  )
-  %>% terra::crop(st_union(sf_uga))
-)
-```
-
-```{r}
-#| fig-width: 5
-#| fig-height: 5
-(
-  ggplot()
-  + geom_spatraster(
-    data = sf_glo_h_plantain_rainfed,
-    mapping = aes(fill = spam2020_V2r0_global_H_PLNT_R)
-  )
-  + scale_fill_paletteer_c(
-    "ggthemes::Orange",
-    na.value = "white",
-    direction = 1
-  )
-  + geom_sf(
-    data = sf_uga,
-    fill = NA,
-    color = "black",
-    # linewidth = 1.1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.background = element_blank(),
-    axis.title = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    legend.key.height = unit(50, "pt"),
-    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
-    legend.text = element_text(size = 14),
-    legend.background = element_blank(),
-    legend.title.position = "right",
-  )
-  + labs(
-    title = "Rainfed Plantain Harvest Area",
-    fill = "Harvest Area (ha)"
-  )
-)
-ggsave(
-  file = "plantains_harvest_rainfed.png",
-  path = fig_dir
-)
-```
 
 ## Disasters - EMDAT
 
@@ -1141,7 +866,7 @@ df_dis_iom
 
 
 
-## DHIS2 Data
+## Violence
 
 ```{r}
 dhis_raw <- read_xlsx(
@@ -1164,39 +889,13 @@ df_dhis <- (
     .name_repair = "unique_quiet"
   )
   %>% select(-last_col())
+  %>% head(-1)
 )
   
 ```
 
 ```{r}
-df_sgbv <- (
-  load_dhis_data("DHIS2_GBV_Data.xlsx")
-  %>% mutate(
-    # The dataset of the geographic areas does not include separate district for cities 
-    # so we need to condense district + city in the data (note that Fort Portal is the 
-    # location of the seat of the Kabarole district
-    # Terego district does not appear in the geometries and we assign it to Arua
-    # as it used to be
-    adm2_name = str_squish(str_remove_all(district, "District|City")),
-    adm2_name = case_when(
-      adm2_name == "Fort Portal" ~ "Kabarole",
-      adm2_name == "Fort" ~ "Kabarole",
-      adm2_name == "Terego" ~ "Arua",
-      .default = adm2_name
-    ),
-    date = lubridate::ceiling_date(
-      as.Date(paste(year, month, "01", sep="-"), "%Y-%B-%d"),
-      "month"
-    ) - lubridate::days(1),
-    cases = replace_na(cases, 0)
-  )
-  %>% group_by(adm2_name, date, variable, sex, age_bracket)
-  %>% summarise(
-    cases = sum(cases, na.rm = TRUE),
-    .groups = "drop"
-  )
-  %>% arrange(adm2_name, date, variable, sex, age_bracket)
-)
+df_sgbv <- load_dhis_viol_data("DHIS2_GBV_Data.xlsx")
 ```
 
 # Data processing

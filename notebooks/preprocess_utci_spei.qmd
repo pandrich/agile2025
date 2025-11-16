@@ -686,16 +686,36 @@ df_clim_adm1_roll <- (
 
 
 ```{r}
+col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
 (
   ggplot(
-    data = df_clim_adm1_roll, 
+    data = df_clim_adm1_roll %>% filter(date > "2015-01-01"), 
     aes(
       x = utci_days_above_32_daily_max_sum_12m, 
-      color = country, 
       fill = country
-    )
+    ),
+    color = "black"
   )
-  + geom_histogram()
+  + geom_histogram(
+    position = "stack"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_manual(
+    values = col_palette
+  )
 )
 ```
 
@@ -722,6 +742,41 @@ df_clim_adm1_roll_dev <- (
     id_cols = c(country, adm1_code, adm1_name, log_pop_density, date, dist_from_last_crop_season),
     names_from = "variable",
     values_from = c(value, dev_value)
+  )
+)
+```
+
+
+```{r}
+col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
+(
+  ggplot(
+    data = df_clim_adm1_roll_dev %>% filter(date > "2015-01-01", country != "Kenya"), 
+    aes(
+      x = dev_value_utci_days_above_32_daily_max_sum_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    position = "stack"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_manual(
+    values = col_palette
   )
 )
 ```
