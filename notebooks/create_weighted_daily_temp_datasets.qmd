@@ -1,0 +1,863 @@
+---
+title: "temp Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/temp_2m")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Country Mapping
+country_map <- c(
+  "MOZ" = "Mozambique",
+  "ZWE" = "Zimbabwe",
+  "LSO" = "Lesotho",
+  "NAM" = "Namibia",
+  "ZMB" = "Zambia",
+  "UGA" = "Uganda",
+  "KEN" = "Kenya"
+)
+```
+
+# Functions
+
+```{r}
+build_temp_daily <- function(rast_temp, adm_shapes) {
+  df_temp <- (
+    rast_temp
+    %>% exactextractr::exact_extract(
+      adm_shapes,
+      fun = "weighted_mean",
+      weights = "area",
+      max_cells_in_memory = 5e9,
+      append_cols = c("country", "adm_code", "adm_name"),
+    )
+  )
+  colnames(df_temp) <- c("country", "adm_code", "adm_name", as.character(terra::time(rast_temp)))
+  
+  df_temp <- (
+    df_temp
+    %>% pivot_longer(
+      cols = -c("country", "adm_code", "adm_name"),
+      names_to = "date",
+      values_to = "temp_2m_max"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d"),
+      temp_2m_max = temp_2m_max - 273.15
+    )
+  )
+  df_temp
+}
+  
+build_weighted_temp_daily_country <- function(iso3, country_map, rast_temp, rast_pop, adm_pop, adm_shapes) {
+  print(paste0("Starting processing temperature data for: ", iso3))
+  rast_temp_country <- rast_temp %>% terra::crop(terra::vect(adm_shapes %>% st_make_valid() %>% st_union()))
+  dfs_temp_daily <- list()
+  times <- terra::time(rast_temp_country)
+  thresholds <- round(quantile(seq_along(times), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  for (i in seq_along(times)) {
+    if (i %in% thresholds) {
+      thresh_idx <- which(thresholds == i)
+      print(paste0(names(thresh_idx), " complete"))
+    }
+    rast_temp_fine <- terra::resample(rast_temp[[i]], rast_pop)
+    rast_temp_weighted <- rast_temp_fine * rast_pop
+    dfs_temp_daily[[i]] <- (
+      rast_temp_weighted
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+        max_cells_in_memory = 176067000,
+        append_cols = c("country", "adm_code"),
+        progress = FALSE
+      )
+      %>% merge(
+        adm_pop,
+        by = "adm_code",
+        all.x = TRUE
+      )
+      %>% mutate(
+        date = as.Date(times[i], format = "%Y-%m-%d"),
+        temp_2m_max = (result / pop) - 273.15
+      )
+    )
+  }
+  df_temp <- (
+    bind_rows(dfs_temp_daily)
+    %>% select(-result)
+    %>% mutate(
+      country = country_map[[iso3]]
+    )
+    %>% relocate(country)
+  )
+  df_temp %>% write_csv(file.path(proc_data_dir, paste0("temp_2m_max_daily_", iso3, ".csv")))
+  df_temp
+}
+```
+
+# Data Import
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Uganda
+
+```{r}
+# sf_uga <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+#     layer = "uga_admbnda_adm2_ubos_20200824"
+#   )
+#   %>% rename_with(tolower)
+#   %>% mutate(
+#     id = row_number()
+#   )
+#   %>% select(
+#     id,
+#     adm_name = admin1name_en,
+#     adm_name = admin2name_en,
+#     adm2_pcode = admin2pcode,
+#     # adm3_name = admin3name_en,
+#     # adm4_name = admin4name_en,
+#     # adm4_pcode = admin4pcode,
+#     geometry = shape
+#   )
+# )
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+    sf_uga,
+    sf_ken
+  )
+)
+```
+
+## Population
+
+### Mozambique
+
+```{r}
+rast_pop_moz_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "moz_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_moz_2022 <- (
+  rast_pop_moz_2022
+  %>% exactextractr::exact_extract(
+    sf_moz,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+rast_pop_zwe_2022 <- (
+  terra::rast(  
+    file.path(raw_data_dir, "population", "zwe_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zwe_2022 <- (
+  rast_pop_zwe_2022
+  %>% exactextractr::exact_extract(
+    sf_zwe,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+rast_pop_lso_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "lso_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_lso_2022 <- (
+  rast_pop_lso_2022
+  %>% exactextractr::exact_extract(
+    sf_lso,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Namibia
+
+```{r}
+rast_pop_nam_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "nam_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_nam_2022 <- (
+  rast_pop_nam_2022
+  %>% exactextractr::exact_extract(
+    sf_nam,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zambia
+
+```{r}
+rast_pop_zmb_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "zmb_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zmb_2022 <- (
+  rast_pop_zmb_2022
+  %>% exactextractr::exact_extract(
+    sf_zmb,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Uganda
+
+```{r}
+rast_pop_uga_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_uga_2022 <- (
+  rast_pop_uga_2022
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Kenya
+
+```{r}
+rast_pop_ken_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "ken_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_ken_2022 <- (
+  rast_pop_ken_2022
+  %>% exactextractr::exact_extract(
+    sf_ken,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+## Temperature
+
+Data from ERA5 received from Neil
+
+```{r}
+rast_temp <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "temp_2m",
+    "era5_t2m_max_2000-2022.nc"
+  )
+)
+```
+
+# Generate Temperature dataset
+
+```{r}
+df_temp <- build_temp_daily(rast_temp, sf_all)
+```
+
+# Generate Population Weighted Temperature datasets
+
+## Method Outline
+
+```{r}
+# For plotting
+xlims <- c(32.1, 33.05)
+ylims <- c(-26.9, -25.5)
+plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[2] + 0.5)
+```
+
+### Temperature in country
+
+```{r}
+rast_temp_moz <- rast_temp %>% terra::crop(terra::vect(sf_moz %>% st_union()))
+rast_times <- terra::time(rast_temp_moz)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_moz[[1]],
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    fill = "Temperature"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_grid_moz.png",
+  width = 5,
+  height = 4
+)
+```
+
+### Downsample one time step
+
+```{r}
+rast_temp_fine_moz <- terra::resample(rast_temp_moz[[1]], rast_pop_moz_2022)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_fine_moz %>% terra::crop(plot_extent),
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "temp"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_fine_moz_zoom.png",
+  width = 5,
+  height = 4
+)
+```
+
+### Population scaled temperature
+
+```{r}
+rast_temp_weighted_moz <- rast_temp_fine_moz * rast_pop_moz_2022
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 4
+
+p1 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_moz_2022 %>% terra::crop(plot_extent),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+
+p2 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_weighted_moz %>% terra::crop(plot_extent),
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Temperature * Population"
+  )
+)
+
+p1 + p2
+
+ggsave(
+  path = fig_dir,
+  filename = "temp_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+### Weighted temp
+
+```{r}
+df_temp_daily_moz <- (
+  rast_temp_weighted_moz
+  %>% exactextractr::exact_extract(
+    sf_moz,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code"),
+    progress = FALSE
+  )
+  %>% merge(
+    adm_pop_moz_2022,
+    by = "adm_code",
+    all.x = TRUE
+  )
+  %>% mutate(
+    date = as.Date(rast_times[1], format = "%Y-%m-%d"),
+    temp_2m_max = (result / pop) - 273.15
+  )
+)
+```
+
+```{r}
+sf_temp_daily_moz <- (
+  sf_moz
+  %>% merge(
+    df_temp_daily_moz,
+    by = "adm_code",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_temp_daily_moz,
+    mapping = aes(fill = temp_2m_max),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted Temperature",
+    fill = "Max daily temperature"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_weighted_moz.png",
+  width = 4,
+  height = 5
+)
+```
+
+## Mozambique
+
+```{r}
+df_weighted_temp_moz <- build_weighted_temp_daily_country("MOZ", country_map, rast_temp, rast_pop_moz_2022, adm_pop_moz_2022, sf_moz)
+```
+
+## Zimbabwe
+
+```{r}
+df_weighted_temp_zwe <- build_weighted_temp_daily_country("ZWE", country_map, rast_temp, rast_pop_zwe_2022, adm_pop_zwe_2022, sf_zwe)
+```
+
+## Lesotho
+
+```{r}
+df_weighted_temp_lso <- build_weighted_temp_daily_country("LSO", country_map, rast_temp, rast_pop_lso_2022, adm_pop_lso_2022, sf_lso)
+```
+
+## Namibia
+
+```{r}
+df_weighted_temp_nam <- build_weighted_temp_daily_country("NAM", country_map, rast_temp, rast_pop_nam_2022, adm_pop_nam_2022, sf_nam)
+```
+
+## Zambia
+
+```{r}
+df_weighted_temp_zmb <- build_weighted_temp_daily_country("ZMB", country_map, rast_temp, rast_pop_zmb_2022, adm_pop_zmb_2022, sf_zmb)
+```
+
+## Uganda
+
+```{r}
+df_weighted_temp_uga <- build_weighted_temp_daily_country("UGA", country_map, rast_temp, rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
+```
+
+## Kenya
+
+```{r}
+df_weighted_temp_ken <- build_weighted_temp_daily_country("KEN", country_map, rast_temp, rast_pop_ken_2022, adm_pop_ken_2022, sf_ken)
+```
+
+# Save
+
+```{r}
+df_temp %>% write_csv(file.path(proc_data_dir, "temp_max_daily_all_countries.csv"))
+```
+
+```{r}
+df_weighted_temp <- bind_rows(
+  df_weighted_temp_moz,
+  df_weighted_temp_zwe,
+  df_weighted_temp_lso,
+  df_weighted_temp_nam,
+  df_weighted_temp_zmb,
+  df_weighted_temp_uga,
+  df_weighted_temp_ken
+)
+ 
+df_weighted_temp %>% write_csv(file.path(proc_data_dir, "weighted_temp_max_daily_all_countries.csv"))
+```

@@ -463,12 +463,15 @@ fit_fem_all_viol <- brm(
   formula = form_fem_all_viol,
   family = bernoulli("logit"),
   prior = c(
-    prior(student_t(6, -4, 1), class = "Intercept"),
-    prior(normal(0, 0.2), class = "b"),
-    prior(normal(0, 0.2), class = "sd")
+    # prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(-4, 2), class = "Intercept"),
+    prior(normal(0, 0.05), class = "b"),
+    prior(normal(0, 0.05), class = "sd")
   ),
   data = df_model_fem,
   seed = seed,
+  refresh = 1000,
+  algorithm = "pathfinder"
   # sample_prior = "only"
 )
 ```

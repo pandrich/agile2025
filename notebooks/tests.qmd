@@ -1,0 +1,56 @@
+---
+title: "tests"
+format: html
+editor: visual
+---
+
+```{r}
+library(rprojroot)
+library(rstan)
+rstan_options(auto_write = TRUE)            # Cache compiled Stan programs
+options(mc.cores = parallel::detectCores()) # Parallelize chains
+options(posterior.num_args = list(sigfig=2))
+parallel:::setDefaultClusterOptions(setup_strategy = "sequential")
+```
+
+```{r}
+# Settings
+nb_name <-  "Testing Betancourt things"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+models_dir <- root("models")
+```
+
+
+```{r}
+simu <- stan(
+  file.path(models_dir, "simu_test.stan"),
+  iter = 1,
+  warmup = 0,
+  chains = 1,
+  seed = seed,
+  algorithm = "Fixed_param"
+)
+```
+
+```{r}
+X <- extract(simu)$X[1, ,]
+y <- extract(simu)$y[1,]
+data <- list("M" = 3, "N" = 1000, "x0" = c(0, 2, -1), "X" = X, "y" = y)
+```
+
+```{r}
+dim(extract(simu)$X)
+```
+
+```{r}
+plot(data$X[,1], data$X[,2], pch=16, cex=1, col="black",
+     main="", xlim=c(-1, 1), xlab="x1", ylim=c(-1, 5), ylab="x2")
+```
+
+```{r}
+qbeta(p = c(0.025, 0.975), 100, 1900)
+```
+

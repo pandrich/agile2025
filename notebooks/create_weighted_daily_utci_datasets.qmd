@@ -1,0 +1,876 @@
+---
+title: "UTCI Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/UTCI")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Country Mapping
+country_map <- sort(c(
+  "KEN" = "Kenya",
+  "LSO" = "Lesotho",
+  "MOZ" = "Mozambique",
+  "NAM" = "Namibia",
+  "UGA" = "Uganda",
+  "ZMB" = "Zambia",
+  "ZWE" = "Zimbabwe"
+))
+```
+
+# Functions
+
+```{r}
+build_utci_daily <- function(data_dir, country_map, adm_shapes) {
+  print(paste0("Starting UTCI data processing"))
+  rast_root_dir <- file.path(data_dir, "UTCI/daily/")
+  country_dir <- list.dirs(rast_root_dir)
+  thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  dfs_utci <- list()
+  for (c in seq_along(country_iso)) {
+    print(paste0("Processing UTCI data for: ", country_iso[[c]]))
+    shape <- adm_shapes %>% filter(country == country_map[[country_iso[[c]]]])
+    rast_files <- list.files(country_dir[[c]], pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
+    thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
+    dfs_utci_country <- list()
+    for (i in seq_along(rast_files)) {
+      if (i %in% thresholds) {
+        thresh_idx <- which(thresholds == i)
+        print(paste0(names(thresh_idx), " complete"))
+      }
+      rast_utci <- terra::rast(rast_files[[i]])["utci_daily_max"]
+      date <- str_split_i(terra::time(rast_utci)[[1]], " ", 1)
+      dfs_utci_country[[i]] <- (
+        rast_utci
+        %>% exactextractr::exact_extract(
+          shape,
+          fun = "weighted_mean",
+          weights = "area",
+          max_cells_in_memory = 176067000,
+          append_cols = c("country", "adm_code", "adm_name"),
+          progress = FALSE
+        )
+        %>% mutate(
+          date = as.Date(date, format = "%Y-%m-%d"),
+          utci_max = weighted_mean - 273.15
+        )
+      )
+    }
+    dfs_utci[[c]] <- (
+      bind_rows(dfs_utci_country)
+      %>% select(-weighted_mean)
+      %>% mutate(
+        country = country_map[[country_iso[[c]]]]
+      )
+      %>% relocate(country)
+    )
+  }
+  df_utci <- bind_rows(dfs_utci)
+}
+
+build_weighted_utci_daily_country <- function(data_dir, iso3, rast_pop, adm_pop, adm_shapes) {
+  print(paste0("Starting processing UTCI data for: ", iso3))
+  dfs_utci_daily <- list()
+  rast_root_dir <- file.path(data_dir, paste0("UTCI/daily/", iso3))
+  rast_files <- list.files(rast_root_dir, pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
+  thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  for (i in seq_along(rast_files)) {
+    if (i %in% thresholds) {
+      thresh_idx <- which(thresholds == i)
+      print(paste0(names(thresh_idx), " complete"))
+    }
+    rast_utci <- terra::rast(rast_files[[i]])["utci_daily_max"]
+    date <- terra::time(rast_utci)[[1]]
+    rast_utci_fine <- terra::resample(rast_utci, rast_pop)
+    rast_utci_weighted <- rast_utci_fine * rast_pop
+    dfs_utci_daily[[i]] <- (
+      rast_utci_weighted
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+        max_cells_in_memory = 176067000,
+        append_cols = c("country", "adm_code"),
+        progress = FALSE
+      )
+      %>% merge(
+        adm_pop,
+        by = "adm_code",
+        all.x = TRUE
+      )
+      %>% mutate(
+        date = as.Date(date, format = "%Y-%m-%d"),
+        utci_max = (result / pop) - 273.15
+      )
+    )
+  }
+  df_utci <- (
+    bind_rows(dfs_utci_daily)
+    %>% select(-result)
+    %>% mutate(
+      country = country_map[[iso3]]
+    )
+    %>% relocate(country)
+  )
+  df_utci %>% write_csv(file.path(proc_data_dir, paste0("utci_max_daily_", iso3, ".csv")))
+  df_utci
+}
+```
+
+# Data Import
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Uganda
+
+```{r}
+# sf_uga <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+#     layer = "uga_admbnda_adm2_ubos_20200824"
+#   )
+#   %>% rename_with(tolower)
+#   %>% mutate(
+#     id = row_number()
+#   )
+#   %>% select(
+#     id,
+#     adm_name = admin1name_en,
+#     adm_name = admin2name_en,
+#     adm2_pcode = admin2pcode,
+#     # adm3_name = admin3name_en,
+#     # adm4_name = admin4name_en,
+#     # adm4_pcode = admin4pcode,
+#     geometry = shape
+#   )
+# )
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+    sf_uga,
+    sf_ken
+  )
+)
+```
+
+## Population
+
+### Mozambique
+
+```{r}
+rast_pop_moz_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "moz_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_moz_2022 <- (
+  rast_pop_moz_2022
+  %>% exactextractr::exact_extract(
+    sf_moz,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zimbabwe
+
+```{r}
+rast_pop_zwe_2022 <- (
+  terra::rast(  
+    file.path(raw_data_dir, "population", "zwe_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zwe_2022 <- (
+  rast_pop_zwe_2022
+  %>% exactextractr::exact_extract(
+    sf_zwe,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Lesotho
+
+```{r}
+rast_pop_lso_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "lso_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_lso_2022 <- (
+  rast_pop_lso_2022
+  %>% exactextractr::exact_extract(
+    sf_lso,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Namibia
+
+```{r}
+rast_pop_nam_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "nam_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_nam_2022 <- (
+  rast_pop_nam_2022
+  %>% exactextractr::exact_extract(
+    sf_nam,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zambia
+
+```{r}
+rast_pop_zmb_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "zmb_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zmb_2022 <- (
+  rast_pop_zmb_2022
+  %>% exactextractr::exact_extract(
+    sf_zmb,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Uganda
+
+```{r}
+rast_pop_uga_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_uga_2022 <- (
+  rast_pop_uga_2022
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Kenya
+
+```{r}
+rast_pop_ken_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "ken_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_ken_2022 <- (
+  rast_pop_ken_2022
+  %>% exactextractr::exact_extract(
+    sf_ken,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+# Generate UTCI dataset
+
+```{r}
+df_utci <- build_utci_daily(raw_data_dir, country_map, sf_all)
+```
+
+# Generate Population Weighted UTCI datasets
+
+Data obtained using the Climate Data Store API
+
+## Method Outline
+
+```{r}
+# For plotting
+xlims <- c(32.1, 33.05)
+ylims <- c(-26.9, -25.5)
+plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[2] + 0.5)
+```
+
+### UTCI in country
+
+```{r}
+rast_root_dir <- file.path(raw_data_dir, "UTCI/daily/MOZ")
+rast_files <- list.files(rast_root_dir, pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
+rast_utci_moz <- terra::rast(rast_files[[1]])["utci_daily_max"]
+date <- terra::time(rast_utci_moz)[[1]]
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = (rast_utci_moz - 273.15),
+    mapping = aes(fill = utci_daily_max)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    fill = "UTCI"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_grid_moz.png",
+  width = 5,
+  height = 4
+)
+```
+
+### Downsample one time step
+
+```{r}
+rast_utci_fine_moz <- terra::resample(rast_utci_moz, rast_pop_moz_2022)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_utci_fine_moz %>% terra::crop(plot_extent),
+    mapping = aes(fill = utci_daily_max)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "UTCI"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_fine_moz_zoom.png",
+  width = 5,
+  height = 4
+)
+```
+
+### Population scaled UTCI
+
+```{r}
+rast_utci_weighted_moz <- rast_utci_fine_moz * rast_pop_moz_2022
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+p1 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_moz_2022 %>% terra::crop(plot_extent),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+
+p2 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_utci_weighted_moz %>% terra::crop(plot_extent),
+    mapping = aes(fill = utci_daily_max)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_moz,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "UTCI * Population"
+  )
+)
+
+p1 + p2
+
+ggsave(
+  path = fig_dir,
+  filename = "utci_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+### Weighted UTCI
+
+```{r}
+df_utci_daily_moz <- (
+  rast_utci_weighted_moz
+  %>% exactextractr::exact_extract(
+    sf_moz,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code"),
+    progress = FALSE
+  )
+  %>% merge(
+    adm_pop_moz_2022,
+    by = "adm_code",
+    all.x = TRUE
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    utci_max = (result / pop) - 273.15
+  )
+  %>% select(-result)
+)
+```
+
+```{r}
+sf_utci_daily_moz <- (
+  sf_moz
+  %>% select(adm_code)
+  %>% merge(
+    df_utci_daily_moz,
+    by = "adm_code",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_utci_daily_moz %>% filter(adm_name != "Maputo City"),
+    mapping = aes(fill = utci_max),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted UTCI Index",
+    fill = "Max daily UTCI"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_weighted_moz.png",
+  width = 4,
+  height = 5
+)
+```
+
+## Mozambique
+
+```{r}
+df_utci_moz <- build_weighted_utci_daily_country(raw_data_dir, "MOZ", rast_pop_moz_2022, adm_pop_moz_2022, sf_moz)
+```
+
+## Zimbabwe
+
+```{r}
+df_weighted_utci_zwe <- build_weighted_utci_daily_country(raw_data_dir, "ZWE", rast_pop_zwe_2022, adm_pop_zwe_2022, sf_zwe)
+```
+
+## Lesotho
+
+```{r}
+df_weighted_utci_lso <- build_weighted_utci_daily_country(raw_data_dir, "LSO", rast_pop_lso_2022, adm_pop_lso_2022, sf_lso)
+```
+
+### Namibia
+
+```{r}
+df_weighted_utci_nam <- build_weighted_utci_daily_country(raw_data_dir, "NAM", rast_pop_nam_2022, adm_pop_nam_2022, sf_nam)
+```
+
+## Zambia
+
+```{r}
+df_weighted_utci_zmb <- build_weighted_utci_daily_country(raw_data_dir, "ZMB", rast_pop_zmb_2022, adm_pop_zmb_2022, sf_zmb)
+```
+
+### Uganda
+
+```{r}
+df_weighted_utci_uga <- build_weighted_utci_daily_country(raw_data_dir, "UGA", rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
+```
+
+### Kenya
+
+```{r}
+df_weighted_utci_ken <- build_weighted_utci_daily_country(raw_data_dir, "KEN", rast_pop_ken_2022, adm_pop_ken_2022, sf_ken)
+```
+
+# Save
+
+```{r}
+df_utci %>% write_csv(file.path(proc_data_dir, "utci_max_daily_all_countries.csv"))
+```
+
+```{r}
+df_weighted_utci <- bind_rows(
+  df_weighted_utci_moz,
+  df_weighted_utci_zwe,
+  df_weighted_utci_lso,
+  df_weighted_utci_nam,
+  df_weighted_utci_zmb,
+  df_weighted_utci_uga,
+  df_weighted_utci_ken
+)
+ 
+df_weighted_utci %>% write_csv(file.path(proc_data_dir, "weighted_utci_max_daily_all_countries.csv"))
+```

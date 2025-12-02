@@ -9,15 +9,16 @@ editor: visual
 ```{r setup}
 # Packages
 library(tidyverse)
+library(sf)
 
 # Path Structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
-proc_data_dir <- root("data/processed")
-vacs_data_dir <- file.path(proc_data_dir, "VACS_clean")
+proc_data_dir <- root("data/processed/VACS_clean")
+vacs_data_dir <- file.path(raw_data_dir, "VACS", "with_urban_rural")
 
 # File Naming
-date <- lubridate::today()
+date <- str_remove_all(lubridate::today(), "-")
 ```
 
 # Notes
@@ -149,7 +150,8 @@ vacs_moz <- (
     ),
     tolerate_women_violence = case_when(
         (
-          gaviol == 1
+          gabeat == 1
+          | gaviol == 1
           | wbout == 1
           | wbnegl == 1
           | wbarg == 1
@@ -157,7 +159,8 @@ vacs_moz <- (
           | wbburn == 1
         ) ~ 1,
         (
-          gaviol == 2
+          gabeat == 2
+          & gaviol == 2
           & wbout == 2
           & wbnegl == 2
           & wbarg == 2
@@ -1288,7 +1291,6 @@ vacs_nam <- (
   # #   sex == 2,
   # #   q2 <= 17
   # # )
-  
   %>% select(
     country,
     adm1_code,
@@ -1319,6 +1321,30 @@ vacs_nam <- (
 ```
 
 ## Zambia
+
+```{r}
+ur_ken <- (
+  readxl::read_xlsx(
+    file.path(
+      raw_data_dir,
+      "VACS_raw",
+      "For Bothaina_091323.xlsx"
+    ),
+    sheet = "Kenya"
+  )
+  %>% select(
+    cluster = `CLUSTER NO`,
+    rural = `RESIDENCE\r\n1=Rural\r\n2=Urban`
+  )
+  %>% mutate(
+    rural = if_else(
+      rural == 1,
+      1,
+      0
+    )
+  )
+)
+```
 
 I believe that `region` indicates if the region is rural or urban. I'm guessing 1 = urban and 2 = rural Why are there 30 sex variables???
 
@@ -1377,7 +1403,7 @@ vacs_zmb <- (
     ),
     adm2_name = NA,
     rural = if_else(
-      region == 2,
+      region == 1,
       1,
       0
     ),
@@ -1596,10 +1622,10 @@ vacs_zmb <- (
     #   .default = NA
     # ),
   )
-  # # # %>% filter(
-  # # #   sex == 2,
-  # # #   q2 <= 17
-  # # # )
+  # %>% filter(
+  #   female == 2,
+  #   q2 <= 17
+  # )
   %>% select(
     country,
     adm1_code = prov,
@@ -1629,10 +1655,350 @@ vacs_zmb <- (
 )
 ```
 
-df# Combine
+## Kenya
 
 ```{r}
-df_vacs <- bind_rows(vacs_moz, vacs_zwe, vacs_lso, vacs_nam, vacs_zmb)
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% as.data.frame()
+  %>% select(
+    adm1_name = dhsregen,
+    adm1_code = regcode
+  )
+  %>% arrange(adm1_code)
+  %>% mutate(
+    adm1_name = case_match(
+      adm1_name,
+      "Elgeyo-Marakwet" ~ "Elgeyo Marakwet",
+      "Murang'a" ~ "Muranga",
+      "Tharaka-Nithi" ~ "Tharaka",
+      "Trans Nzoia" ~ "Trans-Nzoia",
+      .default = adm1_name
+    )
+  )
+)
+```
+
+```{r}
+ur_ken <- (
+  readxl::read_xlsx(
+    file.path(
+      raw_data_dir,
+      "VACS_raw",
+      "VACS_Kenya 2018",
+      "Kenya clusters_2019.xlsx"
+    ),
+    sheet = "KenyaClusters"
+  )
+  %>% select(
+    clust = "Clust",
+    rural = "Rural_Urban"
+  )
+  %>% mutate(
+    rural = if_else(
+      rural == "Rural",
+      1,
+      0
+    )
+  )
+)
+```
+
+```{r}
+vacs_ken <- (
+  haven::read_dta(
+    file.path(
+      vacs_data_dir,
+      "kenya_pud_rurban.dta"
+    )
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    date = as.Date(str_split_i(hdate_f, "T", 1), format = "%Y-%m-%d"),
+    country = "Kenya",
+    female = if_else(sex == "2", 1, 0),
+    adm1_name = str_to_title(county_name),
+    adm2_name = NA,
+    adm2_code = NA,
+    hh_electricity = case_when(
+      h7a == 1 ~ 1,
+      h7a == 2 ~ 0,
+      .default = NA
+    ),
+    hh_mobile_phone = case_when(
+      h7e == 1 ~ 1,
+      h7e == 2 ~ 0,
+      .default = NA
+    ),
+    hh_bike = case_when(
+      h14a == 1 ~ 1,
+      h14a == 2 ~ 0,
+      .default = NA
+    ),
+    hh_motorbike = case_when(
+      h14b == 1 ~ 1,
+      h14b == 2 ~ 0,
+      .default = NA
+    ),
+    hh_car = case_when(
+      h14e == 1 ~ 1,
+      h14e == 2 ~ 0,
+      .default = NA
+    ),
+    hh_gov_support = case_when(
+      h18 == 1 ~ 1,
+      h18 == 2 ~ 0,
+      .default = NA
+    ),
+    hh_non_gov_support = case_when(
+      h19 %in% c(1, 2, 3, 88) ~ 1,
+      h19 == 99 ~ NA,
+      .default = 0
+    ),
+    hh_food_ins = if_else(
+      h20 %in% seq(1, 5),
+      abs(h20 - 5),
+      NA
+    ),
+    in_school = case_when(
+      q4 == 1 ~ 1,
+      q4 %in% c(2, NA) ~ 0,
+      .default = NA
+    ),
+    work = case_when(
+      q11 == 1 ~ 1,
+      q11 == 2 ~ 0,
+      .default = NA
+    ),
+    live_with_mother = case_when(
+      q20 == 2 ~ 1,
+      q20 %in% c(1, NA) ~ 0,
+      .default = NA
+    ),
+    live_with_father = case_when(
+      q30 == 2 ~ 1,
+      q30 %in% c(1, NA) ~ 0,
+      .default = NA
+    ),
+    live_with_partner = case_when(
+      q40 == 1 ~ 1,
+      q40 %in% c(2, NA) ~ 0,
+      .default = NA
+    ),
+    men_sex_control = case_when(
+      q42a == 1 ~ 1,
+      q42a == 2 ~ 0,
+      .default = NA
+    ),
+    tolerate_women_violence = case_when(
+        (
+          q42c == 1
+          | q42e == 1
+          | q43a == 1
+          | q43b == 1
+          | q43c == 1
+          | q43d == 1
+          | q43e == 1
+        ) ~ 1,
+        (
+          q42c == 2
+          & q42e == 2
+          & q43a == 2
+          & q43b == 2
+          & q43c == 2
+          & q43d == 2
+          & q43e == 2
+        ) ~ 0,
+        .default = NA
+      ),
+    # tolerate_child_violence = case_when(
+    #   (q44 == 1) | (q45 == 1) ~ 1,
+    #   (q45 == 2) & (q45 == 2) ~ 0,
+    #   .default = NA
+    # ),
+    # tolerate_parents_child_violence = case_when(
+    #   q44 == 1 ~ 1,
+    #   q45 == 2 ~ 0,
+    #   .default = NA
+    # ),
+    sexexpl = case_when(
+      (q507 >= 1) & (q507 < 98) ~ 1,
+      q507 %in% c(98, 99) ~ NA,
+      .default = 0
+    ),
+    sv_1 = case_when(
+      q600 == 2 ~ 0,
+      q600 == 1 & (q602 == 2 | q609 == 2) ~ 0,
+      q600 == 1 & (q602 == 1 | q609 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_np_1 = case_when(
+      is.na(sv_1) ~ NA,
+      (q605 > 88 & q612 > 88) ~ NA,
+      (sv_1 == 1 & (is.na(q605) & is.na(q612))) ~ NA,
+      (sv_1 == 1 & (q605 %in% c(5:16, 20:88) | q612 %in% c(5:16, 20:88))) ~ 1,
+      .default = 0
+    ),
+    sv_ip_1 = case_when(
+      is.na(sv_1) ~ NA,
+      (q605 > 88 & q612 > 88) ~ NA,
+      (sv_1 == 1 & (is.na(q605) & is.na(q612))) ~ NA,
+      (sv_1 == 1 & (q605 %in% c(1:4, 17:19) | q612 %in% c(1:4, 17:19))) ~ 1,
+      .default = 0
+    ),
+    sv_2 = case_when(
+      (q700a == 2 & q700b == 2) ~ 0,
+      (q700a == 1 | q700b == 1) & (q702 == 2 | q709 == 2) ~ 0,
+      (q700a == 1 | q700b == 1) & (q702 == 1 | q709 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_np_2 = case_when(
+      is.na(sv_2) ~ NA,
+      (q705 > 88 & q712 > 88) ~ NA,
+      (sv_2 == 1 & (is.na(q705) & is.na(q712))) ~ NA,
+      (sv_2 == 1 & (q705 %in% c(5:16, 20:88) | q712 %in% c(5:16, 20:88))) ~ 1,
+      .default = 0
+    ),
+    sv_ip_2 = case_when(
+      is.na(sv_2) ~ NA,
+      (q705 > 88 & q712 > 88) ~ NA,
+      (sv_2 == 1 & (is.na(q705) & is.na(q712))) ~ NA,
+      (sv_2 == 1 & (q705 %in% c(1:4, 17:19) | q712 %in% c(1:4, 17:19))) ~ 1,
+      .default = 0
+    ),
+    sv_3 = case_when(
+      (q800a == 2 & q800b == 2) ~ 0,
+      (q800a == 1 | q800b == 1) & (q802 == 2 | q810 == 2) ~ 0,
+      (q800a == 1 | q800b == 1) & (q802 == 1 | q810 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_np_3 = case_when(
+      is.na(sv_3) ~ NA,
+      (q805 > 88 & q813 > 88) ~ NA,
+      (sv_3 == 1 & (is.na(q805) & is.na(q813))) ~ NA,
+      (sv_3 == 1 & (q805 %in% c(5:16, 20:88) | q813 %in% c(5:16, 20:88))) ~ 1,
+      .default = 0
+    ),
+    sv_ip_3 = case_when(
+      is.na(sv_3) ~ NA,
+      (q805 > 88 & q813 > 88) ~ NA,
+      (sv_3 == 1 & (is.na(q805) & is.na(q813))) ~ NA,
+      (sv_3 == 1 & (q805 %in% c(1:4, 17:19) | q813 %in% c(1:4, 17:19))) ~ 1,
+      .default = 0
+    ),
+    sv_4 = case_when(
+      (q900a == 2 & q900b == 2) ~ 0,
+      (q900a == 1 | q900b == 1) & (q902 == 2 | q909 == 2) ~ 0,
+      (q900a == 1 | q900b == 1) & (q902 == 1 | q909 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_np_4 = case_when(
+      is.na(sv_4) ~ NA,
+      (q905 > 88 & q912 > 88) ~ NA,
+      (sv_4 == 1 & (is.na(q905) & is.na(q912))) ~ NA,
+      (sv_4 == 1 & (q905 %in% c(5:16, 20:88) | q912 %in% c(5:16, 20:88))) ~ 1,
+      .default = 0
+    ),
+    sv_ip_4 = case_when(
+      is.na(sv_4) ~ NA,
+      (q905 > 88 & q912 > 88) ~ NA,
+      (sv_4 == 1 & (is.na(q905) & is.na(q912))) ~ NA,
+      (sv_4 == 1 & (q905 %in% c(1:4, 17:19) | q912 %in% c(1:4, 17:19))) ~ 1,
+      .default = 0
+    ),
+    sv_5 = case_when(
+      (q1000a == 2 & q1000b == 2) ~ 0,
+      (q1000a == 1 | q1000b == 1) & (q1002 == 2) ~ 0,
+      (q1000a == 1 | q1000b == 1) & (q1002 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_np_5 = case_when(
+      (q1000b == 2) ~ 0,
+      (q1000b == 1) & (q1002 == 2) ~ 0,
+      (q1000b == 1) & (q1002 == 1) ~ 1,
+      .default = NA
+    ),
+    sv_ip_5 = case_when(
+      (q1000a == 2) ~ 0,
+      (q1000a == 1) & (q1002 == 2) ~ 0,
+      (q1000a == 1) & (q1002 == 1) ~ 1,
+      .default = NA
+    ),
+    sv = case_when(
+      rowSums(across(c(sv_1, sv_2, sv_3, sv_4, sv_5)), na.rm = TRUE) > 0 ~ 1,
+      (
+        (rowSums(across(c(sv_1, sv_2, sv_3, sv_4, sv_5)), na.rm = TRUE) == 0)
+        & (if_any(c(sv_1, sv_2, sv_3, sv_4, sv_5), ~ is.na(.)))
+      ) ~ NA,
+      .default = 0
+    ),
+    sv_np = case_when(
+      rowSums(across(starts_with("sv_np")), na.rm = TRUE) > 0 ~ 1,
+      (
+        (rowSums(across(starts_with("sv_np")), na.rm = TRUE) == 0)
+        & (if_any(starts_with("sv_np"), ~ is.na(.)))
+      ) ~ NA,
+      .default = 0
+    ),
+    sv_ip = case_when(
+      rowSums(across(starts_with("sv_ip")), na.rm = TRUE) > 0 ~ 1,
+      (
+        (rowSums(across(starts_with("sv_ip")), na.rm = TRUE) == 0)
+        & (if_any(starts_with("sv_ip"), ~ is.na(.)))
+      ) ~ NA,
+      .default = 0
+    ),
+  )
+  # %>% filter(
+  #   female == 2,
+  #   q2 <= 17
+  # )
+  %>% merge(
+    ur_ken,
+    by = "clust",
+    all.x = TRUE
+  )
+  %>% merge(
+    sf_ken,
+    by = "adm1_name",
+    all.x = TRUE
+  )
+  %>% select(
+    country,
+    adm1_code,
+    adm1_name,
+    adm2_code,
+    adm2_name,
+    cluster = clust,
+    date,
+    sample_weight = sampleweight,
+    rural,
+    female,
+    age = q2,
+    hh_food_ins,
+    in_school,
+    work,
+    live_with_mother,
+    live_with_father,
+    live_with_partner,
+    men_sex_control,
+    tolerate_women_violence,
+    # tolerate_parents_child_violence,
+    sexexpl,
+    sv,
+    sv_np,
+    sv_ip
+  )
+)
+```
+
+# Combine
+
+```{r}
+df_vacs <- bind_rows(vacs_moz, vacs_zwe, vacs_lso, vacs_nam, vacs_zmb, vacs_ken)
 ```
 
 ```{r}

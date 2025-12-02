@@ -23,30 +23,15 @@ seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8
 # Folder structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
-proc_data_dir <- root("data/processed")
+proc_data_dir <- root("data/processed/uganda")
 dir.create(proc_data_dir, showWarnings = FALSE)
 fig_dir <- root("figures")
 dir.create(fig_dir, showWarnings = FALSE)
+video_dir <- root("videos")
+dir.create(video_dir, showWarnings = FALSE)
 
 # Viz settings
 col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
-theme_set(
-  theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    strip.background = element_blank(),
-    strip.text = element_text(size = 15, face = "bold"),
-    plot.background = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
-    axis.title = element_text(size = 16),
-    axis.text.y = element_text(size = 15),
-    axis.text.x = element_text(size = 15),
-    legend.background = element_blank(),
-    legend.title = element_text(size = 14),
-    legend.text = element_text(size = 13),
-  )
-)
 ```
 
 # Functions
@@ -125,6 +110,7 @@ load_dhis_viol_data <- function(filename) {
     #   cases = sum(cases, na.rm = TRUE),
     #   .groups = "drop"
     # )
+    %>% select(-c("month", "year"))
     %>% arrange(district, date, variable, sex, age_bracket)
   )
 }
@@ -211,14 +197,14 @@ regions_with_operations <- c(
 )
 
 elgon_region <- c(
-  "Bududa", 
+  "Bududa",
   "Bukedea",
   "Bukwo",
   "Bulambuli",
   "Butaleja",
   "Kapchorwa",
   "Kween",
-  "Manafwa", 
+  "Manafwa",
   "Mbale", 
   "Namisindwa",
   "Sironko", 
@@ -261,6 +247,11 @@ west_nile_region <- c(
   
 
 commodities_to_plot <- c("Maize (white)", "Maize flour", "Cassava flour", "Sorghum")
+
+
+
+
+
 ```
 
 # Load data
@@ -270,48 +261,26 @@ commodities_to_plot <- c("Maize (white)", "Maize flour", "Cassava flour", "Sorgh
 Data from: https://data.humdata.org/dataset/cod-ab-uga
 
 ```{r load_data geom}
-# sf_uga <- (
-#   st_read(
-#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
-#     layer = "uga_admbnda_adm2_ubos_20200824"
-#   )
-#   %>% rename_with(tolower)
-#   %>% st_make_valid()
-#   %>% st_simplify(
-#     dTolerance = 100
-#   )
-#   %>% mutate(
-#     id = row_number(),
-#     admin2name_en = case_when(
-#       admin2name_en == "Madi Okollo" ~ "Madi-Okollo",
-#       admin2name_en == "Ssembabule" ~ "Sembabule",
-#       .default = admin2name_en
-#     )
-#   )
-#   # %>% select(
-#   #   id,
-#   #   adm1_name = admin1name_en,
-#   #   adm2_name = admin2name_en,
-#   #   adm2_pcode = admin2pcode,
-#   #   # adm3_name = admin3name_en,
-#   #   # adm4_name = admin4name_en,
-#   #   # adm4_pcode = admin4pcode,
-#   #   geometry = shape
-#   # )
-# )
-```
-
-```{r}
-(
-  sf_uga
-  %>% st_crop(
-    xmin = 30.88,
-    ymin = 2.98,
-    xmax = 31.13,
-    ymax = 3.27
+df_uga_pcodes <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+    layer = "uga_admbnda_adm2_ubos_20200824"
   )
-)$adm2_name %>% unique()
-    
+  %>% rename_with(tolower)
+  %>% as.data.frame()
+  %>% select(
+    region = admin1name_en,
+    district = admin2name_en,
+    district_code = admin2pcode,
+  )
+  %>% mutate(
+    district = case_when(
+      district == "Madi Okollo" ~ "Madi-Okollo",
+      district == "Ssembabule" ~ "Sembabule",
+      .default = district
+    )
+  )
+)
 ```
 
 From data sent by Herbert
@@ -328,9 +297,6 @@ sf_uga <- (
     ),
   )
   %>% rename_with(tolower)
-  # %>% mutate(
-  #   district = str_to_title(district)
-  # )
   %>% mutate(
     district = case_match(
       district,
@@ -338,10 +304,11 @@ sf_uga <- (
       .default = str_to_title(district)
     )
   )
-  %>% select(district)
+  %>% rename(
+    district_code = objectid
+  )
 )
 ```
-
 
 ## Population
 
@@ -394,7 +361,7 @@ Data from: https://hub.worldpop.org/geodata/listing?id=136
 #   )
 # )
 ```
- 
+
 ```{r}
 # df_pop_adm_2022 <- (
 #   rast_pop_2022
@@ -414,7 +381,6 @@ Data from: https://hub.worldpop.org/geodata/listing?id=136
 #   )
 # )
 ```
-
 
 ## Crop cycles
 
@@ -477,6 +443,8 @@ df_crops <- (
 
 Data from: https://data.humdata.org/dataset/global-wfp-food-prices
 
+It contains data only for 36 districts
+
 ```{r load data food prices}
 food_prices_files <- list.files(file.path(raw_data_dir, "food_prices", "wfp_food_prices", fsep = "/"))
 list_food_prices <- list()
@@ -534,6 +502,8 @@ sf_food_prices_wfp_uga <- (
 
 data from: https://data.jrc.ec.europa.eu/collection/id-0112
 
+This dataset does not contain data for all districts. The separation of "City" districts is not included and some others don't appear.
+
 ```{r}
 df_crop_warn <- (
   read_delim(
@@ -553,10 +523,15 @@ df_crop_warn <- (
     .groups = "drop"
   )
   %>% mutate(
-    date = ceiling_date(month, "month") - days(1)
+    date = ceiling_date(month, "month") - days(1),
+    asap2_name = case_match(
+      asap2_name,
+      "Ssembabule" ~ "Sembabule",
+      .default = asap2_name
+    )
   )
   %>% select(
-    adm2_name = asap2_name,
+    district = asap2_name,
     date,
     w_crop,
     w_range
@@ -564,10 +539,11 @@ df_crop_warn <- (
 )
 ```
 
-
 ## Food Insecurity
 
 https://data.humdata.org/dataset/uganda-acute-food-insecurity-country-data
+
+This variable requires some work because the "area" is not always a district, it depends on how extensive the food insecurity warning is.
 
 ```{r}
 fs_cols <- (
@@ -593,13 +569,13 @@ df_fs <- (
     is.na(`level 1`)
   )
   %>% select(
-    adm2_name = area,
+    area,
     date = to,
     phase,
     percentage
   )
   %>% pivot_wider(
-    id_cols = c(adm2_name, date),
+    id_cols = c(area, date),
     names_from = phase,
     values_from = percentage,
     names_prefix = "fs_level_"
@@ -607,9 +583,9 @@ df_fs <- (
   %>% mutate(
     fs_level_above_3 = rowSums(select(., c(fs_level_3, fs_level_4, fs_level_5)))
   )
+  %>% arrange(area, date)
 )
 ```
-
 
 ## Malnutrition
 
@@ -617,11 +593,11 @@ df_fs <- (
 df_maln <- load_dhis_maln_data("Nutrition_Data.xlsx")
 ```
 
-
-
-## NDVI 
+## NDVI
 
 https://data.humdata.org/dataset/uga-ndvi-subnational
+
+For this one we need to sort out the mapping between the admin codes and other datasets, something is off
 
 ```{r}
 df_ndvi <- (
@@ -629,24 +605,57 @@ df_ndvi <- (
     file.path(raw_data_dir, "NDVI", "uga-ndvi-subnat-full.csv"),
     show_col_types = FALSE
   )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    district_code = paste0("UG", adm_id),
+    month = lubridate::floor_date(date, "month"),
+    vim = as.numeric(vim),
+    vim_avg = as.numeric(vim_avg),
+    viq = as.numeric(viq)
+  )
   %>% filter(
     date >= "2020-01-01"
   )
-  %>% mutate(
-    adm2_code = paste0("UG", adm_id)
+  %>% group_by(
+    district_code,
+    month,
   )
+  %>% summarise(
+    viq = mean(viq, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% mutate(
+    date = lubridate::ceiling_date(month, "month") - lubridate::days(1)
+  )
+  # %>% merge(
+  #   df_uga_pcodes,
+  #   by = "district_code",
+  #   all.x = TRUE
+  # )
   %>% select(
-    adm2_code,
+    district_code,
     date,
-    vim,      # 10-day NDVI
-    vim_avg,  # NDVI long-term average
+    # vim,      # 10-day NDVI
+    # vim_avg,  # NDVI long-term average
     viq       # 10 day NDVI anomaly
   )
 )
 ```
 
-
 ## UTCI
+
+### Raw UTCI raster - 2024
+
+```{r}
+utci_files_2024 <- list.files(file.path(raw_data_dir, "UTCI", "daily", "UGA", "utci_daily_UGA_2024"), pattern = "^ECMWF_utci_daily_stats", full.names = TRUE)
+rlist <- lapply(utci_files_2024, function(f) {
+  r <- terra::rast(f)["utci_daily_max"]            # assume the first/only variable is the one you want
+  r - 273.15
+})
+rast_utci_2024 <- do.call(c, rlist)
+```
+
+### Population weighted UTCI
 
 ```{r}
 df_utci <- (
@@ -657,7 +666,15 @@ df_utci <- (
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
   )
-  %>% rename(district = id)
+  %>% rename(
+    district_code = adm_code
+  )
+  %>% select(
+    district_code,
+    pop,
+    date,
+    utci_days_above_32_daily_max
+  )
 )
 ```
 
@@ -672,10 +689,55 @@ df_spei <- (
   %>% mutate(
     date = ceiling_date(date, "month") - days(1)
   )
-  %>% rename(district = id)
+  %>% rename(
+    district_code = adm_code
+  )
 )
 ```
 
+## Rainfall
+
+From ClimateServ
+
+### Raw rainfall raster
+
+```{r}
+rast_rain <- terra::rast(
+  file.path(
+    raw_data_dir,
+    "rainfall",
+    "rainfall_UGA.nc"
+  )
+)
+```
+
+
+### Population weighted rainfall
+
+We sum the rain for each month as the violence data is by month anyway
+
+```{r}
+df_rain <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "rainfall_weighted_UGA_adm.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% group_by(
+    adm2_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    rainfall = sum(rainfall, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% rename(
+    district = adm2_name
+  )
+)
+```
 
 
 ## Disasters - EMDAT
@@ -864,376 +926,358 @@ df_dis_iom <- (
 df_dis_iom
 ```
 
-
-
 ## Violence
 
 ```{r}
-dhis_raw <- read_xlsx(
-  file.path(raw_data_dir, "Uganda", "DHIS2", "DHIS2_GBV_Data.xlsx"),
-  sheet = "2020",
-  col_names = FALSE,
-  .name_repair = "unique_quiet"
-)
-headers <- as_tibble(t(zoo::na.locf(t(dhis_raw[1:4, 1:(dim(dhis_raw)[2] -1)]))))
-combined_names <- apply(headers, 2, function(x) paste(x, collapse = "_"))
-```
-
-```{r}
-df_dhis <- (
-  read_xlsx(
-    file.path(raw_data_dir, "Uganda", "DHIS2", "DHIS2_GBV_Data.xlsx"),
-    sheet = "2020",
-    skip = 5,
-    col_names = TRUE,
-    .name_repair = "unique_quiet"
-  )
-  %>% select(-last_col())
-  %>% head(-1)
-)
-  
-```
-
-```{r}
-df_sgbv <- load_dhis_viol_data("DHIS2_GBV_Data.xlsx")
+df_viol <- load_dhis_viol_data("DHIS2_GBV_Data.xlsx")
 ```
 
 # Data processing
 
-```{r}
-df_clim_uga_adm1 <- (
-  df_utci_uga
-  %>% merge(
-    sf_uga %>% select(adm1_code, adm1_name),
-    by = "adm1_code",
-    all.x = TRUE
-  )
-  %>% merge(
-    df_spei_zmb %>% select(-pop),
-    by = c("adm1_code", "date"),
-    all.x = TRUE
-  )
-  %>% mutate(
-    country = "Zambia",
-    adm1_area = unclass(st_area(st_make_valid(geometry))) / 1E6,
-    pop_density = pop / adm1_area,
-    log_pop_density = log10(pop_density)
-  )
-)
-```
-
-
-## Combine climate, geographies and population
+## Population
 
 ```{r}
-df_clim_adm2 <- (
-  df_uga
-  %>% merge(
-    df_utci,
-    by = "id",
-    all.x = TRUE
-  )
-  %>% merge(
-    df_spei_zwe %>% select(-pop),
-    by = c("adm1_code", "date"),
-    all.x = TRUE
-  )
-  %>% mutate(
-    country = "Zimbabwe",
-    adm1_area = unclass(st_area(geometry)) / 1E6,
-    pop_density = pop / adm1_area,
-    log_pop_density = log10(pop_density)
-  )
-)
-```
-
-
-```{r}
-df_clim_adm2 <- (
+df_pop <- (
   sf_uga
+  %>% as.data.frame()
+  %>% select(district_code, district)
   %>% merge(
-    df_utci,
-    by = "id",
+    df_utci %>% distinct(district_code, pop),
+    by = "district_code",
     all.x = TRUE
   )
-  %>% as.data.frame()
-  %>% select(-c(id, adm2_pcode, geometry))
-  %>% arrange(adm2_name, date)
-  %>% group_by(
-    adm1_name, adm2_name, pop
-  )
   %>% mutate(
-    across(
-      -c(date, utci_monthly_max, utci_monthly_min), 
-      ~ zoo::rollsum((.), 12, fill = NA, align = "right"),
-      .names = "{.col}_sum_12m"
-    ),
-    across(
-      c(utci_monthly_max, utci_monthly_min),
-      ~ zoo::rollmax((.), 12, fill = NA, align = "right"),
-      .names = "{.col}_max_12m"
-    ),
-  )
-  %>% ungroup()
-  %>% mutate(
-    month = month(date)
-  )
-  %>% group_by(adm2_name, month)
-  %>% mutate(
-    across(
-      (contains("utci") & !(contains("12m"))),
-      ~ (.) - mean(., na.rm = TRUE),
-      .names = "dev_from_adm2_month_mean_{.col}"
+    district = case_match(
+      district,
+      "Kassnda" ~ "Kassanda",
+      "Madi Okollo" ~ "Madi-Okollo",
+      "Namutunmba" ~ "Namutumba",
+      .default = district
     )
   )
-  %>% ungroup()
-  %>% group_by(adm2_name)
-  %>% mutate(
-    across(
-      contains("utci") & (contains("12m")), 
-      ~ (.) - mean(., na.rm = TRUE),
-      .names = "dev_from_adm2_mean_{.col}"
-    )
-  )
-  %>% ungroup()
 )
 ```
 
-## Combine UTCI and violence
+
+## Malnutrition
 
 ```{r}
-df_sgbv_adm2 <- (
-  df_sgbv
+df_maln_all <- (
+  df_maln
   %>% filter(
-    variable == "Injuries due to Gender based violence"
+    variable != "Clients with SAM admitted into treatment - Died during treatment",
+    date < "2025-01-01"
   )
-  %>% group_by(adm2_name, date)
+  %>% group_by(
+    district,
+    date
+  )
   %>% summarise(
-    cases = sum(cases, na.rm = TRUE),
+    maln_cases = sum(cases, na.rm = TRUE),
     .groups = "drop"
   )
 )
 ```
 
+
+## Violence
+
 ```{r}
-df_utci_sgbv_adm2 <- (
-  df_utci_adm2
+df_viol_all <- (
+  df_viol
+  %>% filter(
+    variable == "Injuries due to Gender based violence"
+  )
+  %>% group_by(district, date)
+  %>% summarise(
+    viol_cases = sum(cases, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+
+## Combine malnutrition and violence
+
+### By district
+
+```{r}
+df_health_distr <- (
+  df_maln_all
   %>% merge(
-    df_sgbv_adm2,
-    by = c("adm2_name", "date"),
+    df_viol_all,
+    by = c("district", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_pop %>% select(-district_code),
+    by = "district",
     all.x = TRUE
   )
   %>% filter(date >= "2020-01-31")
   %>% mutate(
-    cases_per_1000 = 1000 * cases / pop,
+    maln_cases_per_1000 = 1000 * maln_cases / pop,
+    viol_cases_per_1000 = 1000 * viol_cases / pop
   )
-  %>% group_by(adm2_name)
+  %>% pivot_longer(
+    cols = -c(district, pop, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(district, variable)
   %>% mutate(
-    dev_from_adm_mean_cases = cases - mean(cases, na.rm = TRUE),
-    dev_from_adm_mean_cases_per_1000 = cases_per_1000 - mean(cases_per_1000, na.rm = TRUE),
+    mean_value = mean(value, na.rm = TRUE)
   )
   %>% ungroup()
+  %>% mutate(
+    dev_value = (value - mean_value)
+  )
+  %>% pivot_wider(
+    id_cols = c(district, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
 )
 ```
 
 ```{r}
-df_utci_sgbv_reg <- (
-  df_utci_adm2
+colSums(is.na(df_health_distr))
+```
+
+```{r}
+df_health_distr$district %>% unique()
+```
+
+```{r}
+df_clim_distr_month$district %>% unique()
+```
+
+### By region
+
+```{r}
+df_health_reg <- (
+  df_maln_all
   %>% merge(
-    df_sgbv_adm2,
-    by = c("adm2_name", "date"),
+    df_viol_all,
+    by = c("district", "date"),
     all.x = TRUE
   )
-  %>% filter(date >= "2020-01-31")
+  %>% merge(
+    df_pop %>% select(-district_code),
+    by = "district",
+    all.x = TRUE
+  )
   %>% mutate(
     region = case_when(
-      adm2_name %in% karamoja_region ~"Karamoja",
-      adm2_name %in% elgon_region ~ "Elgon",
-      adm2_name %in% rwenzori_region ~ "Rwenzori",
+      district %in% karamoja_region ~"Karamoja",
+      district %in% elgon_region ~ "Elgon",
+      district %in% rwenzori_region ~ "Rwenzori",
+      .default = "Rest of the country"
+    )
+  )
+  %>% filter(date >= "2020-01-31")
+  %>% group_by(region, date)
+  %>% summarise(
+    pop = sum(pop),
+    viol_cases = sum(viol_cases, na.rm = TRUE),
+    maln_cases = sum(maln_cases, na.rm = TRUE),
+    maln_cases_per_1000 = 1000 * maln_cases / pop,
+    viol_cases_per_1000 = 1000 * viol_cases / pop,
+    across(-c(district, pop), ~ mean(., na.rm = TRUE)),
+    .groups = "drop"
+  )
+  %>% pivot_longer(
+    cols = -c(region, pop, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(region, pop, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = (value - mean_value)
+  )
+  %>% pivot_wider(
+    id_cols = c(region, pop, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+```{r}
+colSums(is.na(df_health_reg))
+```
+
+
+## Combine climate variables 
+
+
+```{r}
+df_clim <- (
+  df_utci
+  %>% merge(
+    sf_uga %>% select(district_code, district),
+    by = "district_code",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei %>% select(-pop),
+    by = c("district_code", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_rain,
+    by = c("district", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_crop_warn,
+    by = c("district", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    district = case_match(
+      district,
+      "Kassnda" ~ "Kassanda",
+      "Madi Okollo" ~ "Madi-Okollo",
+      "Namutunmba" ~ "Namutumba",
+      .default = district
+    ),
+    district_area = unclass(st_area(geometry)) / 1E6,
+    pop_density = pop / district_area,
+    log_pop_density = log10(pop_density),
+    rainfall_density = rainfall / district_area
+  )
+  %>% select(-c(district_code, district_area, pop_density))
+)
+```
+
+```{r}
+colSums(is.na(df_clim))
+```
+
+```{r}
+(
+  df_clim
+  %>% filter(is.na(rainfall))
+)
+```
+
+
+Calculate deviation from monthly mean
+
+```{r}
+df_clim_distr_month <- (
+  df_clim
+  %>% mutate(
+    month = lubridate::month(date, label = TRUE, abbr = TRUE)
+  )
+  %>% pivot_longer(
+    cols = -c(district, pop, log_pop_density,  geometry, date, month),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(district, pop, log_pop_density, geometry, variable, month)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = (value - mean_value)
+  )
+  %>% select(-month, mean_value)
+  %>% pivot_wider(
+    id_cols = c(district, pop, log_pop_density, geometry, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+
+```{r}
+df_clim_reg_month <- (
+  df_clim
+  %>% as.data.frame()
+  %>% mutate(
+    region = case_when(
+      district %in% karamoja_region ~"Karamoja",
+      district %in% elgon_region ~ "Elgon",
+      district %in% rwenzori_region ~ "Rwenzori",
       .default = "Rest of the country"
     )
   )
   %>% group_by(region, date)
   %>% summarise(
     pop = sum(pop),
-    cases = sum(cases, na.rm = TRUE),
-    cases_per_1000 = 1000 * cases / pop,
-    across(contains("dev_from_adm2_month"), ~ mean(., na.rm = TRUE)),
+    across(-c(district, pop, log_pop_density, geometry), ~ mean(., na.rm = TRUE)),
     .groups = "drop"
   )
-  %>% group_by(region)
-  %>% mutate(
-    dev_from_reg_mean_cases = cases - mean(cases, na.rm = TRUE),
-    dev_from_reg_mean_cases_per_1000 = cases_per_1000 - mean(cases_per_1000, na.rm = TRUE),
-  )
-)
-```
-
-# Viz
-
-## Violence
-
-```{r}
-#| fig-width: 6
-#| fig-height: 4.5
-
-min_year <- min(year(df_utci_sgbv_reg$date))
-max_year <- max(year(df_utci_sgbv_reg$date))
-years <- seq(min_year, max_year, by = 1)
-num_years <- length(years)
-(
-  df_utci_sgbv_reg
   %>% pivot_longer(
-    cols = c(dev_from_reg_mean_cases_per_1000),
+    cols = -c(region, pop, date),
     names_to = "variable",
     values_to = "value"
   )
-  %>% filter(
-    region != "Rwenzori"
-  )
   %>% mutate(
-    region = fct_relevel(
-      region,
-      "Karamoja",
-      "Elgon",
-      "Rest of the country"
-    )
+    month = lubridate::month(date, label = TRUE, abbr = TRUE)
   )
-  # %>% ggplot(
-  #   aes(x = date, y = value, color = region, linetype = region)
-  # )
-  # + geom_line(linewidth = 1.2)
-  # + scale_color_manual(
-  #   values = c(
-  #     "Karamoja" = col_palette[1],
-  #     "Elgon" = col_palette[5],
-  #     "Rest of the country" = "black"
-  #   )
-  # )
-  # + scale_linetype_manual(
-  #   values = c("Karamoja" = "solid", "Elgon" = "solid", "Rest of the country" = "dashed"),
-  # )
-  # + scale_x_date(
-  #   breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
-  #   labels = c(rep(c(""), num_years + 1), rep(years)),
-  #   limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
-  # )
-  # + theme(
-  #   panel.background = element_blank(),
-  #   panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
-  #   panel.grid = element_blank(),
-  #   plot.background = element_blank(),
-  #   plot.title = element_text(size = 15, hjust = 0.5),
-  #   plot.subtitle = element_text(size = 13, hjust = 0.5),
-  #   axis.title = element_text(size = 16),
-  #   axis.text.y = element_text(size = 15),
-  #   axis.text.x = element_text(size = 15),
-  #   legend.background = element_blank(),
-  #   legend.title = element_text(size = 14),
-  #   legend.text = element_text(size = 13),
-  #   legend.position = "top",
-  #   legend.direction = "vertical",
-  #   legend.justification = "left",
-  #   # legend.position = "inside",
-  #   # legend.position.inside = c(0.8, 0.72),
-  #   axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
-  # )
-  # + labs(
-  #   x = "Date",
-  #   y = "Cases per 1000 people\n(dev. from regional mean)",
-  #   color = "Region"
-  # )
-  # + guides(
-  #   linetype = "none"
-  # )
-)
-
-ggsave(file.path(fig_dir, "viol_cases_over_time_by_region.png"))
-```
-
-```{r}
-df_utci_sgbv_adm2_month_summary <- (
-  df_utci_sgbv_adm2
-  %>% group_by(month)
-  %>% summarise(
-    utci_month = mean(utci_days_above_32_daily_max, na.rm = TRUE),
-    mean_cases = mean(cases, na.rm = TRUE)
+  %>% group_by(region, pop, month, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
   )
   %>% ungroup()
   %>% mutate(
-    dev_cases = mean_cases - mean(mean_cases, na.rm = TRUE),
-    dev_utci_month = utci_month - mean(utci_month)
+    dev_value = (value - mean_value)
+  )
+  %>% select(-month)
+  %>% pivot_wider(
+    id_cols = c(region, pop, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
   )
 )
 ```
+
+
+## Combine all
+
+
+### By district
 
 ```{r}
-(
-  df_utci_sgbv_adm2_month_summary
-  %>% pivot_longer(
-    cols = c("dev_cases", "dev_utci_month"),
-    names_to = "variable",
-    values_to = "value"
+df_distr <- (
+  df_health_distr
+  %>% merge(
+    df_clim_distr_month,
+    by = c("district", "date"),
+    all.x = TRUE
   )
-  %>% mutate(
-    month = as.factor(month)
-  )
-  %>% ggplot(aes(x = month, y = value, fill = variable))
-  + geom_col()
-  + facet_wrap(
-    ~ variable,
-    ncol = 1,
-    scales = "free_y",
-    labeller = as_labeller(c(
-      "dev_cases" = "Dev. cases from mean",
-      "dev_utci_month" = "Dev. UTCI from mean"
-    ))
-  )
-  + scale_fill_manual(
-    values = c(
-      "dev_cases" = col_palette[4],
-      "dev_utci_month" = col_palette[6]
-    )
-  )
-  + scale_x_discrete(
-    breaks = seq(1, 12),
-    labels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    plot.title = element_text(size = 15, hjust = 0.5),
-    plot.subtitle = element_text(size = 13, hjust = 0.5),
-    axis.title.x = element_text(size = 16),
-    axis.title.y = element_blank(),
-    axis.text.y = element_text(size = 15),
-    axis.text.x = element_text(size = 15),
-    legend.background = element_blank(),
-    legend.title = element_text(size = 14),
-    legend.text = element_text(size = 13),
-    # legend.position = "inside",
-    # legend.position.inside = c(0.8, 0.72),
-  )
-  + guides(
-    fill = "none"
-  )
-  + labs(
-    x = "Month",
-  )
-)
-
-ggsave(
-  file.path(fig_dir, "viol_utci_month_comp.png")
 )
 ```
+
+
+### By region
 
 ```{r}
-cor(df_utci_sgbv_adm2_month_summary$dev_cases, df_utci_sgbv_adm2_month_summary$dev_utci_month)
+df_reg <- (
+  df_health_reg
+  %>% merge(
+    df_clim_reg_month,
+    by = c("region", "date"),
+    all.x = TRUE
+  )
+)
 ```
 
-## Disaster locations
+
+# Viz
+
+## Locations
+
+### Disaster locations
 
 ```{r}
 #| fig-width: 5
@@ -1242,9 +1286,9 @@ cor(df_utci_sgbv_adm2_month_summary$dev_cases, df_utci_sgbv_adm2_month_summary$d
   sf_uga
   %>% mutate(
     region = case_when(
-      adm2_name %in% karamoja_region ~"Karamoja",
-      adm2_name %in% elgon_region ~ "Elgon",
-      adm2_name %in% rwenzori_region ~ "Rwenzori"
+      district %in% karamoja_region ~"Karamoja",
+      district %in% elgon_region ~ "Elgon",
+      district %in% rwenzori_region ~ "Rwenzori"
     )
   )
   %>% mutate(
@@ -1267,8 +1311,6 @@ cor(df_utci_sgbv_adm2_month_summary$dev_cases, df_utci_sgbv_adm2_month_summary$d
     axis.title = element_blank(),
     axis.ticks = element_blank(),
     axis.text = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),
     legend.title = element_blank(),
     legend.text = element_text(size = 16),
     legend.background = element_blank(),
@@ -1281,13 +1323,11 @@ cor(df_utci_sgbv_adm2_month_summary$dev_cases, df_utci_sgbv_adm2_month_summary$d
 ggsave(
   path = fig_dir,
   filename = "affected_locations.png",
-  width = 6,
-  height = 5,
   unit = "in"
 )
 ```
 
-## Market locations
+### Market locations
 
 ```{r}
 #| fig-width: 5
@@ -1337,15 +1377,11 @@ sf_food_prices_wfp_uga_maize_latest <- (
 )
 ggsave(
   filename = file.path(fig_dir, "uga_map_market_location.png"),
-  height = 5,
-  width = 5,
   unit = "in"
 )
 ```
 
-# Disaster Analysis
-
-## General
+## Disasters
 
 ### EM-DAT data
 
@@ -1383,7 +1419,7 @@ num_years <- length(years)
     linewidth = 1.2
   )
   + scale_color_manual(
-    values = c("Karamoja" = "#dc7726", "Elgon" = "#ecc046", "Rwenzori" = "#35A29F", "Rest of the country" = "gray"),
+    values = c("Karamoja" = col_palette[1], "Elgon" = col_palette[3], "Rwenzori" = col_palette[8], "Rest of the country" = "black"),
     na.value = "whitesmoke",
     na.translate = FALSE
   )
@@ -1691,7 +1727,7 @@ num_years <- length(years)
     linewidth = 1.2
   )
   + scale_color_manual(
-    values = c("Karamoja" = "#dc7726", "Elgon" = "#ecc046", "Teso" = "#0292b7", "Rwenzori" = "#35A29F", "Rest of the country" = "gray"),
+    values = c("Karamoja" = col_palette[1], "Elgon" = col_palette[3], "Teso" = col_palette[5], "Rwenzori" = col_palette[8], "Rest of the country" = "black"),
     na.value = "whitesmoke",
     na.translate = FALSE
   )
@@ -1745,6 +1781,1357 @@ num_years <- length(years)
   %>% arrange(desc(affected))
 )
 ```
+
+## Climate
+
+### UTCI
+
+```{r}
+#| fig-width: 6
+#| fig-height: 4.5
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  # df_clim_reg_month
+  %>% pivot_longer(
+    cols = c(dev_value_utci_days_above_32_daily_max),
+    names_to = "variable",
+    values_to = "value"
+  )
+  # %>% filter(
+  #   region != "Rwenzori"
+  # )
+  %>% mutate(
+    region = fct_relevel(
+      region,
+      "Karamoja",
+      "Elgon",
+      "Rwenzori",
+      "Rest of the country"
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = region, linetype = region)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_manual(
+    values = c(
+      "Karamoja" = col_palette[1],
+      "Elgon" = col_palette[3],
+      "Rwenzori" = col_palette[8],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Karamoja" = "solid", "Elgon" = "solid", "Rwenzori" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    # legend.position = "inside",
+    # legend.position.inside = c(0.8, 0.72),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "# days above heat stress\n(dev. from regional mean)",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+ggsave(file.path(fig_dir, "utci_over_time_by_region.png"))
+```
+
+
+```{r}
+# Video parameters
+video_start_date <- as.Date("2024-11-01")   
+n_frames        <- 60                   
+step            <- 1                      
+fps             <- 2                   
+png_width       <- 5                     
+png_height      <- 5
+png_dpi         <- 300
+```
+
+```{r}
+power <- 4
+square_trans <- trans_new(
+  name = "square",
+  transform = function(x) x^power,
+  inverse   = function(x) x^(-power)
+)
+```
+
+
+```{r}
+xmin <- 29.45
+xmax <- 35.15
+ymin <- -1.59
+ymax <- 4.32
+utci_dates <- sapply(terra::time(rast_utci_2024), function(x) str_split_i(x, " ", 1))
+start_idx <- which(utci_dates >= video_start_date)[1]
+utci_lyrs <- terra::nlyr(rast_utci_2024)
+video_idxs <- seq(start_idx, by = step, length.out = n_frames)
+if (max(video_idxs) > utci_lyrs) {
+  warning(
+    sprintf(
+      "Requested frames exceed available layers. Reducing n_frames from %d to %d.",
+      n_frames, 
+      sum(video_idxs <= utci_lyrs)
+    )
+  )
+  video_idxs <- video_idxs[video_idxs <= utci_lyrs]
+  n_frames <- length(video_idxs)
+}
+video_dates <- utci_dates[video_idxs]
+sel_rast_utci <- (
+  rast_utci_2024[[video_idxs]]
+  %>% terra::crop(terra::ext(xmin, xmax, ymin, ymax))
+)
+g <- terra::global(sel_rast_utci, fun = c("min", "max"), na.rm = TRUE)
+min_vals <- g[, "min"]
+max_vals <- g[, "max"]
+min_val <- min(min_vals, na.rm = TRUE)
+max_val <- max(max_vals, na.rm = TRUE)
+
+fill_scale_utci <- scale_fill_paletteer_c(
+  "ggthemes::Orange-Blue-White Diverging",
+  na.value = "white",
+  direction = -1,
+  limits = c(min_val, max_val),
+)
+```
+
+
+
+```{r}
+utci_video_dir <- file.path(video_dir, "UTCI_frames")
+dir.create(utci_video_dir, showWarnings = FALSE)
+unlink(paste0(utci_video_dir, "/*"))
+
+for (i in seq_along(video_idxs)) {
+
+  data_to_plot <- sel_rast_utci[[i]]
+  names(data_to_plot) <- "value"
+  
+  p <- (
+    ggplot()
+    + geom_spatraster(
+      data = data_to_plot,
+      mapping = aes(fill = value)
+    )
+    + fill_scale_utci
+    + geom_sf(
+      data = sf_uga,
+      fill = NA,
+      color = "black",
+      # size = 0.3
+    )
+    + coord_sf(
+      xlim = c(xmin + 0.45, xmax - 0.3),
+      ylim = c(ymin + 0.45, ymax - 0.3)
+    )
+    + theme(
+      # panel.background = element_blank(),
+      panel.background = element_rect(fill = "white", color = "white"),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      # plot.background = element_blank(),
+      plot.background = element_rect(fill = "white", color = "white"),
+      axis.title = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      plot.title = element_text(size = 20, hjust = 0.5),
+      plot.subtitle = element_text(size = 18, hjust = 0.5),
+      # legend.position = "none"
+      legend.key.height = unit(50, "pt"),
+      legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+      legend.text = element_text(size = 16),
+      legend.background = element_blank(),
+      legend.title.position = "right",
+    )
+    + labs(
+      title = "Heat stress",
+      subtitle = video_dates[i],
+      fill = "UTCI index"
+    )
+  )
+  
+  ggsave(
+    file.path(
+      utci_video_dir,
+      sprintf("frame_%03d.png", i)
+    ),
+    plot = p,
+    width = 5,
+    height = 5, 
+    dpi = png_dpi
+  )
+}
+```
+
+```{r}
+img_list <- list.files(utci_video_dir, pattern = "^frame_\\d+\\.png$", full.names = TRUE)
+img_list <- img_list[order(img_list)]
+video_path <- file.path(utci_video_dir, "utci_UGA.gif")
+
+message("Building GIF...")
+images <- magick::image_read(img_list)
+animated_gif <- magick::image_animate(images, fps = fps, dispose = "previous")
+magick::image_write(animated_gif, path = video_path)
+message("Saved GIF to: ", video_path)
+```
+
+### SPEI
+
+```{r}
+#| fig-width: 6
+#| fig-height: 4.5
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  # df_clim_reg_month
+  %>% pivot_longer(
+    cols = c(value_spei),
+    names_to = "variable",
+    values_to = "value"
+  )
+  # %>% filter(
+  #   region != "Rwenzori"
+  # )
+  %>% mutate(
+    region = fct_relevel(
+      region,
+      "Karamoja",
+      "Elgon",
+      "Rwenzori",
+      "Rest of the country"
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = region, linetype = region)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_manual(
+    values = c(
+      "Karamoja" = col_palette[1],
+      "Elgon" = col_palette[3],
+      "Rwenzori" = col_palette[8],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Karamoja" = "solid", "Elgon" = "solid", "Rwenzori" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    # legend.position = "inside",
+    # legend.position.inside = c(0.8, 0.72),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "SPEI \n(dev. from regional mean)",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+ggsave(file.path(fig_dir, "spei_over_time_by_region.png"))
+```
+
+
+```{r}
+(
+  df_reg
+  %>% filter(
+    region == "Karamoja", 
+    date > "2020-01-01"
+  )
+  %>% ggplot()
+  + geom_line(
+    aes(
+      x = date,
+      # y = dev_value_utci_days_above_32_daily_max,
+      y = dev_value_spei,
+      color = region
+    )
+  )
+)
+    
+```
+
+
+### Rainfall
+
+```{r}
+# Video parameters
+video_start_date <- as.Date("2024-11-01")   
+n_frames        <- 60                   
+step            <- 1                      
+fps             <- 2                   
+png_width       <- 5                     
+png_height      <- 5
+png_dpi         <- 300
+```
+
+
+```{r}
+xmin <- 29.45
+xmax <- 35.15
+ymin <- -1.59
+ymax <- 4.32
+rain_dates <- terra::time(rast_rain)
+start_idx <- which(rain_dates >= video_start_date)[1]
+rain_lyrs <- terra::nlyr(rast_rain)
+video_idxs <- seq(start_idx, by = step, length.out = n_frames)
+if (max(video_idxs) > rain_lyrs) {
+  warning(
+    sprintf(
+      "Requested frames exceed available layers. Reducing n_frames from %d to %d.",
+      n_frames, 
+      sum(video_idxs <= rain_lyrs)
+    )
+  )
+  video_idxs <- video_idxs[video_idxs <= rain_lyrs]
+  n_frames <- length(video_idxs)
+}
+video_dates <- rain_dates[video_idxs]
+sel_rast_rain <- (
+  rast_rain[[video_idxs]]
+  %>% terra::crop(terra::ext(xmin, xmax, ymin, ymax))
+)
+g <- terra::global(sel_rast_rain, fun = c("min", "max"), na.rm = TRUE)
+min_vals <- g[, "min"]
+max_vals <- g[, "max"]
+min_val <- min(min_vals, na.rm = TRUE)
+max_val <- max(max_vals, na.rm = TRUE)
+
+fill_scale_rain <- scale_fill_paletteer_c(
+  "scico::oslo",
+  na.value = "transparent",
+  direction = -1,
+  limits = c(min_val, max_val),
+  # transform = "sqrt"
+)
+```
+
+
+
+```{r}
+rain_video_dir <- file.path(video_dir, "rain_frames")
+dir.create(rain_video_dir, showWarnings = FALSE)
+unlink(paste0(rain_video_dir, "/*"))
+
+for (i in seq_along(video_idxs)) {
+
+  data_to_plot <- sel_rast_rain[[i]]
+  names(data_to_plot) <- "value"
+  
+  p <- (
+    ggplot()
+    + geom_spatraster(
+      data = data_to_plot,
+      mapping = aes(fill = value)
+    )
+    + fill_scale
+    + geom_sf(
+      data = sf_uga,
+      fill = NA,
+      color = "black",
+      # size = 0.3
+    )
+    + coord_sf(
+      xlim = c(xmin + 0.45, xmax - 0.3),
+      ylim = c(ymin + 0.45, ymax - 0.3)
+    )
+    + theme(
+      panel.background = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.background = element_blank(),
+      axis.title = element_blank(),
+      axis.ticks = element_blank(),
+      axis.text = element_blank(),
+      plot.title = element_text(size = 20, hjust = 0.5),
+      plot.subtitle = element_text(size = 18, hjust = 0.5),
+      # legend.position = "none"
+      legend.key.height = unit(50, "pt"),
+      legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+      legend.text = element_text(size = 16),
+      legend.background = element_blank(),
+      legend.title.position = "right",
+    )
+    + labs(
+      title = "Daily Precipation",
+      subtitle = video_dates[i],
+      fill = "Rainfall (mm)"
+    )
+  )
+  
+  ggsave(
+    file.path(
+      rain_video_dir,
+      sprintf("frame_%03d.png", i)
+    ),
+    plot = p,
+    width = 5,
+    height = 5, 
+    dpi = png_dpi
+  )
+}
+```
+
+```{r}
+img_list <- list.files(rain_video_dir, pattern = "^frame_\\d+\\.png$", full.names = TRUE)
+img_list <- img_list[order(img_list)]
+video_path <- file.path(rain_video_dir, "rainfall_UGA.gif")
+
+message("Building GIF...")
+images <- magick::image_read(img_list)
+animated_gif <- magick::image_animate(images, fps = fps, dispose = "previous")
+magick::image_write(animated_gif, path = video_path)
+message("Saved GIF to: ", video_path)
+```
+
+## Malnutrition
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  %>% pivot_longer(
+    cols = c(value_maln_cases_per_1000),
+    names_to = "variable",
+    values_to = "value"
+  )
+  # %>% filter(
+  #   region != "Rwenzori"
+  # )
+  %>% mutate(
+    region = fct_relevel(
+      region,
+      "Karamoja",
+      "Elgon",
+      "Rwenzori",
+      "Rest of the country"
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = region, linetype = region)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_manual(
+    values = c(
+      "Karamoja" = col_palette[1],
+      "Elgon" = col_palette[3],
+      "Rwenzori" = col_palette[8],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Karamoja" = "solid", "Elgon" = "solid", "Rwenzori" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_y_continuous(
+    breaks = c(-0.1, 0.0, 0.1),
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "Cases per 1000 people\n(dev. from regional mean)",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+ggsave(file.path(fig_dir, "maln_cases_over_time_by_region.png"))
+```
+
+
+## Violence
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  %>% pivot_longer(
+    cols = c(dev_value_viol_cases_per_1000),
+    names_to = "variable",
+    values_to = "value"
+  )
+  # %>% filter(
+  #   region != "Rwenzori"
+  # )
+  %>% mutate(
+    region = fct_relevel(
+      region,
+      "Karamoja",
+      "Elgon",
+      "Rwenzori",
+      "Rest of the country"
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = region, linetype = region)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_manual(
+    values = c(
+      "Karamoja" = col_palette[1],
+      "Elgon" = col_palette[3],
+      "Rwenzori" = col_palette[8],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Karamoja" = "solid", "Elgon" = "solid", "Rwenzori" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + scale_y_continuous(
+    breaks = c(-0.1, 0.0, 0.1),
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    axis.title = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "Cases per 1000 people\n(dev. from regional mean)",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+ggsave(file.path(fig_dir, "viol_cases_over_time_by_region.png"))
+```
+
+
+## Climate VS Violence
+
+```{r}
+df_distr_month_summary <- (
+  # df_clim_viol_distr
+  df_distr
+  %>% mutate(
+    month = lubridate::month(date, label = TRUE, abbr = TRUE)
+  )
+  %>% group_by(month)
+  %>% summarise(
+    utci_month = mean(value_utci_days_above_32_daily_max, na.rm = TRUE),
+    spei_month = mean(value_spei, na.rm = TRUE),
+    rain_month = mean(value_rainfall, na.rm = TRUE),
+    mean_maln_cases_per_1000 = mean(value_maln_cases_per_1000, na.rm = TRUE),
+    mean_viol_cases_per_1000 = mean(value_viol_cases_per_1000, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_utci_month = utci_month - mean(utci_month),
+    dev_spei_month = spei_month - mean(spei_month),
+    dev_rain_month = rain_month - mean(rain_month),
+    dev_maln_cases_per_1000 = mean_maln_cases_per_1000 - mean(mean_maln_cases_per_1000, na.rm = TRUE),
+    dev_viol_cases_per_1000 = mean_viol_cases_per_1000 - mean(mean_viol_cases_per_1000, na.rm = TRUE)
+  )
+)
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 8.5
+
+(
+  df_distr_month_summary
+  %>% select(-c(utci_month, spei_month, rain_month, mean_maln_cases_per_1000, mean_viol_cases_per_1000))
+  %>% pivot_longer(
+    cols = c("dev_viol_cases_per_1000", "dev_maln_cases_per_1000", "dev_utci_month", "dev_spei_month", "dev_rain_month"),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    month = as.factor(month),
+    variable = fct_relevel(
+      variable, 
+      "dev_rain_month",
+      "dev_spei_month",
+      "dev_utci_month",
+      "dev_maln_cases_per_1000",
+      "dev_viol_cases_per_1000"
+    )
+  )
+  %>% ggplot(aes(x = month, y = value, fill = variable))
+  + geom_col()
+  + facet_wrap(
+    ~ variable,
+    ncol = 1,
+    scales = "free_y",
+    labeller = as_labeller(c(
+      "dev_viol_cases_per_1000" = "Viol. per 1000",
+      "dev_maln_cases_per_1000" = "Maln. per 1000",
+      "dev_utci_month" = "UTCI",
+      "dev_spei_month" = "SPEI",
+      "dev_rain_month" = "Rainfall"
+    )),
+    strip.position = "left"
+  )
+  + scale_fill_manual(
+    values = c(
+      "dev_viol_cases_per_1000" = col_palette[1],
+      "dev_maln_cases_per_1000" = col_palette[2],
+      "dev_utci_month" = col_palette[4],
+      "dev_spei_month" = col_palette[6],
+      "dev_rain_month" = col_palette[8]
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing = unit(-1, "pt"),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size= 16),
+    strip.placement = "outside",
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.8, 0.72),
+  )
+  + guides(
+    fill = "none"
+  )
+  + labs(
+    x = "Month",
+  )
+)
+
+ggsave(
+  file.path(fig_dir, "viol_clim_month_comp.png")
+)
+```
+
+```{r}
+cor(df_distr_month_summary$dev_viol_cases_per_1000, df_distr_month_summary$dev_utci_month)
+```
+
+```{r}
+cor(df_distr_month_summary$dev_viol_cases_per_1000, df_distr_month_summary$dev_spei_month)
+```
+
+```{r}
+cor(df_distr_month_summary$dev_viol_cases_per_1000, df_distr_month_summary$dev_maln_cases_per_1000)
+```
+
+```{r}
+cor(df_distr$dev_value_viol_cases_per_1000, -df_distr$value_spei, use = "pairwise.complete.obs")
+```
+
+```{r}
+cor(df_distr_month_summary$dev_viol_cases_per_1000, df_distr_month_summary$dev_rain_month)
+```
+
+
+```{r}
+(
+  df_distr 
+  # %>% mutate(
+  #   value_viol_cases_per_1000 = lead(value_viol_cases_per_1000, n = 1)
+  # )
+  %>% ggplot(
+    aes(x = value_maln_cases_per_1000, y = value_viol_cases_per_1000)
+  )
+  + geom_point(color = col_palette[2])
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size= 16),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.8, 0.72),
+  )
+)
+```
+
+```{r}
+(
+  df_distr 
+  %>% mutate(
+    value_viol_cases_per_1000 = lead(value_viol_cases_per_1000, n = 1)
+  )
+  %>% select(
+    dev_value_utci_days_above_32_daily_max,
+    dev_value_spei,
+    dev_value_rainfall,
+    value_viol_cases_per_1000
+  )
+  %>% pivot_longer(
+    cols = -value_viol_cases_per_1000,
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% ggplot(
+    aes(x = value, y = value_viol_cases_per_1000, color = variable)
+  )
+  + geom_point()
+  + facet_wrap(
+    ~variable,
+    ncol = 1,
+    scales = "free"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size= 16),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.8, 0.72),
+  )
+)
+  
+```
+
+
+
+## Comparison by Region
+
+### Karamoja
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+
+(
+  sf_uga
+  %>% mutate(
+    region = if_else(
+      district %in% karamoja_region,
+      "Karamoja",
+      NA
+    )
+  )
+  %>% ggplot()
+  + geom_sf(
+    aes(fill = region)
+  )
+  + scale_fill_manual(
+    values = c("Karamoja" = col_palette[1]),
+    na.value = "transparent",
+    na.translate = FALSE
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.position = "right",
+    legend.direction = "vertical",
+    legend.key.spacing.y = unit(3, "pt"),
+    legend.margin = margin(0, 0, 0, 0, "pt")
+  )
+  + guides(
+    fill = "none"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "karamoja_region.png",
+  unit = "in"
+)
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 8.5
+
+cols_to_plot <- c(
+  # "value_utci_days_above_32_daily_max",
+  # "value_spei",
+  # "value_rainfall_density",
+  "dev_value_utci_days_above_32_daily_max",
+  "dev_value_spei",
+  "dev_value_rainfall_density",
+  # "value_w_crop",
+  # "value_maln_cases_per_1000",
+  # "value_viol_cases_per_1000"
+  "dev_value_maln_cases_per_1000",
+  "dev_value_viol_cases_per_1000"
+)
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  %>% filter(
+    date < "2025-01-01",
+    region == "Karamoja"
+  )
+  %>% pivot_longer(
+    cols = all_of(cols_to_plot),
+    names_to = "variable",
+    values_to = "value"
+  )
+   %>% mutate(
+    variable = fct_relevel(
+      variable,
+      cols_to_plot
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value)
+  )
+  + geom_hline(
+    yintercept = 0,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  )
+  + geom_line(
+    linewidth = 1.2,
+    color = col_palette[1]
+  )
+  + facet_wrap(
+    ~ variable,
+    ncol = 1,
+    scales = "free_y",
+    labeller = as_labeller(c(
+      # "value_viol_cases_per_1000" = "Viol. per 1000",
+      # "value_maln_cases_per_1000" = "Maln. per 1000",
+      # "value_utci_days_above_32_daily_max" = "UTCI",
+      # "value_spei" = "SPEI",
+      # "value_rainfall_density" = "Rainfall"
+      "dev_value_viol_cases_per_1000" = "Viol. per 1000",
+      "dev_value_maln_cases_per_1000" = "Maln. per 1000",
+      "dev_value_utci_days_above_32_daily_max" = "UTCI",
+      "dev_value_spei" = "SPEI",
+      "dev_value_rainfall_density" = "Rainfall"
+    )),
+    strip.position = "left"
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    panel.spacing = unit(-1, "pt"),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16),
+    strip.placement = "outside",
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "Value",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+# ggsave(file.path(fig_dir, "viol_cases_over_time_by_region.png"))
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_distr
+  %>% mutate(
+    region = if_else(
+      district %in% karamoja_region,
+      "Karamoja",
+      "Rest of the country"
+    )
+  )
+  # %>% filter(
+  #   # district %in% distr_to_consider
+  #   district %in% elgon_region
+  # )
+  %>% group_by(region, date)
+  %>% summarise(
+    maln = mean(value_maln_cases_per_1000, na.rm = TRUE),
+    viol = mean(value_viol_cases_per_1000, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% pivot_longer(
+    cols = c(maln, viol),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = region, linetype = region)
+  )
+  + geom_line(
+    linewidth = 1.2,
+  )
+  + facet_wrap(
+    ~variable,
+    ncol = 1, 
+    scales = "free_y",
+    labeller = as_labeller(c(
+      "maln" = "Maln. per 1000",
+      "viol" = "Viol. per 1000"
+    )),
+    strip.position = "left"
+  )
+  + scale_color_manual(
+    values = c(
+      "Karamoja" = col_palette[1],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Karamoja" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16),
+    strip.placement = "outside",
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    legend.position = "inside",
+    legend.position.inside = c(0.7, 0.93),
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+  )
+)
+
+ggsave(file.path(fig_dir, "viol_cases_over_time_kara.png"))
+```
+
+
+
+### Elgon
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 8.5
+
+cols_to_plot <- c(
+  # "value_utci_days_above_32_daily_max",
+  # "value_spei",
+  # "value_rainfall_density",
+  "dev_value_utci_days_above_32_daily_max",
+  "dev_value_spei",
+  "dev_value_rainfall_density",
+  # "value_w_crop",
+  # "value_maln_cases_per_1000",
+  # "value_viol_cases_per_1000"
+  "dev_value_maln_cases_per_1000",
+  "dev_value_viol_cases_per_1000"
+)
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_reg
+  %>% filter(
+    date < "2025-01-01",
+    region == "Elgon"
+  )
+  %>% pivot_longer(
+    cols = all_of(cols_to_plot),
+    names_to = "variable",
+    values_to = "value"
+  )
+   %>% mutate(
+    variable = fct_relevel(
+      variable,
+      cols_to_plot
+    )
+  )
+  %>% ggplot(
+    aes(x = date, y = value)
+  )
+  + geom_hline(
+    yintercept = 0,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  )
+  + geom_line(
+    linewidth = 1.2,
+    color = col_palette[3]
+  )
+  + facet_wrap(
+    ~ variable,
+    ncol = 1,
+    scales = "free_y",
+    labeller = as_labeller(c(
+      # "value_viol_cases_per_1000" = "Viol. per 1000",
+      # "value_maln_cases_per_1000" = "Maln. per 1000",
+      # "value_utci_days_above_32_daily_max" = "UTCI",
+      # "value_spei" = "SPEI",
+      # "value_rainfall_density" = "Rainfall"
+      "dev_value_viol_cases_per_1000" = "Viol. per 1000",
+      "dev_value_maln_cases_per_1000" = "Maln. per 1000",
+      "dev_value_utci_days_above_32_daily_max" = "UTCI",
+      "dev_value_spei" = "SPEI",
+      "dev_value_rainfall_density" = "Rainfall"
+    )),
+    strip.position = "left"
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    panel.spacing = unit(-1, "pt"),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16),
+    strip.placement = "outside",
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    legend.position = "top",
+    legend.direction = "vertical",
+    legend.justification = "left",
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "Value",
+    color = "Region"
+  )
+  + guides(
+    linetype = "none"
+  )
+)
+
+# ggsave(file.path(fig_dir, "viol_cases_over_time_by_region.png"))
+```
+
+### Focus on Mountain area
+
+```{r}
+#| fig-width: 5
+#| fig-height: 5
+
+distr_to_consider <- c(
+  "Bududa",
+  "Bukwo",
+  "Bulambuli",
+  "Kween",
+  "Manafwa",
+  "Mbale", 
+  "Sironko"
+)
+
+(
+  sf_uga
+  %>% mutate(
+    region = if_else(
+      # district %in% distr_to_consider,
+      district %in% elgon_region,
+      "Elgon",
+      NA
+    )
+  )
+  %>% ggplot()
+  + geom_sf(
+    aes(fill = region)
+  )
+  + scale_fill_manual(
+    values = c("Elgon" = "#ecc046"),
+    na.value = "transparent",
+    na.translate = FALSE
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.position = "right",
+    legend.direction = "vertical",
+    legend.key.spacing.y = unit(3, "pt"),
+    legend.margin = margin(0, 0, 0, 0, "pt")
+  )
+  + guides(
+    fill = "none"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "elgon_region.png",
+  unit = "in"
+)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+min_year <- min(year(df_reg$date))
+max_year <- max(year(df_reg$date))
+years <- seq(min_year, max_year, by = 1)
+num_years <- length(years)
+(
+  df_distr
+  %>% mutate(
+    region = if_else(
+      district %in% elgon_region,
+      "Elgon",
+      "Rest of the country"
+    )
+  )
+  # %>% filter(
+  #   # district %in% distr_to_consider
+  #   district %in% elgon_region
+  # )
+  %>% group_by(region, date)
+  %>% summarise(
+    maln = mean(value_maln_cases_per_1000, na.rm = TRUE),
+    viol = mean(value_viol_cases_per_1000, na.rm = TRUE)
+  )
+  %>% ggplot(
+    aes(x = date, y = viol, color = region, linetype = region)
+  )
+  + geom_line(
+    linewidth = 1.2,
+  )
+  + scale_color_manual(
+    values = c(
+      "Elgon" = col_palette[3],
+      "Rest of the country" = "black"
+    )
+  )
+  + scale_linetype_manual(
+    values = c("Elgon" = "solid", "Rest of the country" = "dashed"),
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    # limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2025-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 15, hjust = 0.5),
+    axis.title.y = element_text(size = 16),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    legend.position = "inside",
+    legend.position.inside = c(0.3, 0.83),
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1)))
+  )
+  + labs(
+    x = "Date",
+    y = "Viol. per 1000"
+  )
+)
+
+ggsave(file.path(fig_dir, "viol_cases_over_time_elgon.png"))
+```
+
+# Disaster Analysis
+
 
 ## Karamoja, 2022 Drought
 

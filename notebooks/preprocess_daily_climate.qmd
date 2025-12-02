@@ -1,0 +1,1462 @@
+---
+title: "Test Weighted UTCI"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(paletteer)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+
+# Settings
+nb_name <-  "Process daily climate data"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+# Functions
+
+```{r}
+calculate_utci_12m_stats <- function(df_clim_daily, variable_name) {
+  df_clim_12m <- (
+    df_clim_daily
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      hist_mean = mean(clim, na.rm = TRUE),
+      hist_sd = sd(clim, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (clim - hist_mean) / hist_sd,
+      above_1sd = if_else(sd_clim > 1, 1, 0),
+      above_32 = if_else(clim > 32, 1, 0)
+    )
+    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, clim),
+        ~ zoo::rollsum((.), 365, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+      ),
+      mean_12m = zoo::rollmean(clim, 365, fill = NA, align = "right"),
+      max_12m = zoo::rollmax(clim, 365, fill = NA, align = "right"),
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(above_1sd_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = value - mean_value
+    )
+    %>% mutate(
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_clim_12m
+}
+
+calculate_clim_12m_stats <- function(df_clim_daily, variable_name) {
+  df_clim_12m <- (
+    df_clim_daily
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      hist_mean = mean(clim, na.rm = TRUE),
+      hist_sd = sd(clim, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (clim - hist_mean) / hist_sd,
+      above_1sd = if_else(sd_clim > 1, 1, 0),
+      above_32 = if_else(clim > 32, 1, 0)
+    )
+    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, clim),
+        ~ zoo::rollsum((.), 365, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+      ),
+      mean_12m = zoo::rollmean(clim, 365, fill = NA, align = "right"),
+      max_12m = zoo::rollmax(clim, 365, fill = NA, align = "right"),
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(above_1sd_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = if_else(
+        sd_value == 0,
+        0,
+        (value - mean_value) / sd_value
+      )
+    )
+    %>% mutate(
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_clim_12m
+}
+```
+
+# Data Import
+
+## UTCI daily
+
+There are 10 UTCI thermal stress categories that correspond to specific human physiological responses to the thermal environment. The categories relate to UTCI values as follows: above +46: extreme heat stress; +38 to +46: very strong heat stress; +32 to +38: strong heat stress; +26 to +32: moderate heat stress; +9 to +26: no thermal stress; +9 to 0: slight cold stress; 0 to -13: moderate cold stress; -13 to -27: strong cold stress; -27 to -40: very strong cold stress; below -40: extreme cold stress.
+
+```{r}
+df_utci_daily <- (
+  read_csv(
+    file.path(proc_data_dir, "UTCI", "utci_max_daily_all_countries.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    clim = utci_max
+  )
+)
+```
+
+## Population Weighted UTCI daily
+
+```{r}
+df_weighted_utci_daily <- (
+  read_csv(
+    file.path(proc_data_dir, "UTCI", "weighted_utci_max_daily_all_countries.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    clim = utci_max
+  )
+  %>% select(-pop)
+)
+```
+
+## Temperature
+
+```{r}
+df_temp_daily <- (
+  read_csv(
+    file.path(proc_data_dir, "temp_2m", "temp_max_daily_all_countries.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    clim = temp_2m_max
+  )
+)
+```
+
+## Population Weighted Temperature
+
+```{r}
+df_weighted_temp_daily <- (
+  read_csv(
+    file.path(proc_data_dir, "temp_2m", "weighted_temp_max_daily_all_countries.csv"),
+    show_col_types = FALSE
+  )
+  %>% rename(
+    clim = temp_2m_max
+  )
+  %>% select(-pop)
+)
+```
+
+# Process Data
+
+## UTCI
+
+```{r}
+df_utci_12m <- calculate_utci_12m_stats(df_utci_daily, "utci_max")
+```
+
+## Population Weighted UTCI
+
+```{r}
+df_weighted_utci_12m <- calculate_utci_12m_stats(df_weighted_utci_daily, "weighted_utci_max")
+```
+
+## Temperature
+
+```{r}
+df_temp_12m <- calculate_clim_12m_stats(df_temp_daily, "temp_2m_max")
+```
+
+```{r}
+colSums(is.na(df_temp_12m))
+```
+
+## Population Weighted Temperature
+
+```{r}
+df_weighted_temp_12m <- calculate_clim_12m_stats(df_weighted_temp_daily, "weighted_temp_2m_max")
+```
+
+```{r}
+colSums(is.na(df_weighted_temp_12m))
+```
+
+# Combine climate variables
+
+```{r}
+df_clim_12m <- ( 
+  df_utci_12m
+  %>% merge(
+    df_weighted_utci_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_temp_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_weighted_temp_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    adm_name = case_when(
+      adm_name == "Harare Chitungwiza" ~ "Harare",
+      adm_name == "//Karas" ~ "!Karas",
+      .default = adm_name
+    ),
+  )
+)
+```
+
+
+# Visualizations
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_temp_2m_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    position = "stack",
+    stat = "density"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days temperature 1 sd above mean (dev)",
+    y = "Density",
+  )
+)
+```
+
+## UTCI
+
+### UTCI above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_utci_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days UTCI above 32",
+    y = "Density",
+  )
+)
+```
+
+###Weighted UTCI above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_weighted_utci_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted UTCI above 32",
+    y = "Density",
+  )
+)
+```
+
+### Dev UTCI above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_utci_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days UTCI above 32 (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Dev weighted UTCI above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_weighted_utci_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted UTCI above 32 (dev)",
+    y = "Density",
+  )
+)
+```
+
+### UTCI above 1sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_utci_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days UTCI above 1 sd",
+    y = "Density",
+  )
+)
+```
+
+### Weighted UTCI above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_weighted_utci_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted UTCI above 1 sd",
+    y = "Density",
+  )
+)
+```
+
+### Dev UTCI above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_utci_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days UTCI above 1sd (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Dev weighted UTCI above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_weighted_utci_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted UTCI above 1 sd (dev)",
+    y = "Density",
+  )
+)
+```
+
+### UTCI above 32 time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    value_utci_max_above_32_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = value_utci_max_above_32_12m)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days UTCI max above  (month)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_max_above_32_month_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Weighted UTCI above 32 time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    value_weighted_utci_max_above_32_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = value_weighted_utci_max_above_32_12m)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days weighted UTCI max above 32"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "weighted_utci_max_above_32_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Dev UTCI above 32 time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    dev_value_utci_max_above_32_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_utci_max_above_32_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days UTCI max above 32 (dev)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "utci_max_above_32_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Dev weighted UTCI above 32 time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    dev_value_weighted_utci_max_above_32_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_weighted_utci_max_above_32_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days weighted UTCI max above 32 (dev)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "weighted_utci_max_above_32_moz.png",
+  width = 9,
+  height = 5
+)
+```
+
+## Temperature
+
+### Temperature above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_temp_2m_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days temperature above 32",
+    y = "Density",
+  )
+)
+```
+
+### Weighted temperature above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_weighted_temp_2m_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted temperature above 32",
+    y = "Density",
+  )
+)
+```
+
+### Dev temperature above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_temp_2m_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days temperature above 32 (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Dev weighted temperature above 32
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_weighted_temp_2m_max_above_32_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted temperature above 32 (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Temperature above 1sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_temp_2m_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days temperature above 1 sd",
+    y = "Density",
+  )
+)
+```
+
+### Weighted temperature above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = value_weighted_temp_2m_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 30
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted temperature above 1 sd",
+    y = "Density",
+  )
+)
+```
+
+### Dev temperature above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_temp_2m_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days temperature above 1sd (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Dev weighted temperature above 1 sd
+
+```{r}
+(
+  ggplot(
+    data = df_clim_12m %>% filter(date > "2015-01-01"), 
+    aes(
+      x = dev_value_weighted_temp_2m_max_above_1sd_12m, 
+      fill = country
+    ),
+    color = "black"
+  )
+  + geom_histogram(
+    aes(y = after_stat(density)),
+    position = "stack",
+    bins = 40
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_paletteer_d(
+    "MetBrewer::Derain",
+    na.value = "transparent",
+  )
+  + labs(
+    x = "# days weighted temperature above 1 sd (dev)",
+    y = "Density",
+  )
+)
+```
+
+### Temperature above 1 sd time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    value_temp_2m_max_above_1sd_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = value_temp_2m_max_above_1sd_12m)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days temperature max above 1 sd (month)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_2m_max_above_1sd.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Weighted temperature above 1 sd time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    value_weighted_temp_2m_max_above_1sd_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = value_weighted_temp_2m_max_above_1sd_12m)
+  )
+  + geom_line(
+    color = "#0292b7",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days weighted_temperature max above 1 sd"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "weighted_temp_2m_max_above_1sd.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Dev temperature above 1 sd time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    dev_value_temp_2m_max_above_1sd_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_temp_2m_max_above_1sd_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days temperature max above 1 sd (dev)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "dev_temp_2m_max_above_1sd.png",
+  width = 9,
+  height = 5
+)
+```
+
+### Dev weighted temperature above 1 sd time series
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+
+(
+  df_clim_12m
+  %>% filter(
+    date > "2010-01-01",
+    date < "2025-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Tete", "Zambezia"))
+  )
+  %>% select(
+    date,
+    adm_name,
+    dev_value_weighted_temp_2m_max_above_1sd_12m,
+  )
+  %>% ggplot(
+    mapping = aes(x = date, y = dev_value_weighted_temp_2m_max_above_1sd_12m)
+  )
+  + geom_line(
+    color = "#dc7726",
+    linewidth = 1.3
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    panel.spacing.x = unit(25, "pt"),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    plot.margin = margin(t = 0, r = 20, b = 0, l = 10, unit = "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.ticks.length = unit(4, "pt"),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+  )
+  + labs(
+    x = "Date",
+    y = "# days weighted temperature max above 1 sd (dev)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "dev_weighted_temp_2m_max_above_1sd.png",
+  width = 9,
+  height = 5
+)
+```
+
+# Save data
+
+```{r}
+df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_daily.csv"))
+```

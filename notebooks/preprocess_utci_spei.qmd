@@ -166,7 +166,6 @@ sf_ken <- (
 )
 ```
 
-
 ## UTCI
 
 There are 10 UTCI thermal stress categories that correspond to specific human physiological responses to the thermal environment. The categories relate to UTCI values as follows: above +46: extreme heat stress; +38 to +46: very strong heat stress; +32 to +38: strong heat stress; +26 to +32: moderate heat stress; +9 to +26: no thermal stress; +9 to 0: slight cold stress; 0 to -13: moderate cold stress; -13 to -27: strong cold stress; -27 to -40: very strong cold stress; below -40: extreme cold stress.
@@ -241,7 +240,6 @@ df_utci_zmb <- (
 )
 ```
 
-
 ### Kenya
 
 ```{r}
@@ -256,7 +254,6 @@ df_utci_ken <- (
   %>% rename(adm1_code = id)
 )
 ```
-
 
 ## Crop cycles
 
@@ -315,7 +312,6 @@ df_crops <- (
   )
 )
 ```
-
 
 ```{r}
 (
@@ -566,7 +562,6 @@ df_clim_ken_adm1 <- (
 )
 ```
 
-
 ### Combine
 
 ```{r}
@@ -684,7 +679,6 @@ df_clim_adm1_roll <- (
 )
 ```
 
-
 ```{r}
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
 (
@@ -719,7 +713,6 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
 )
 ```
 
-
 ## Calculate deviations from average
 
 ```{r}
@@ -745,7 +738,6 @@ df_clim_adm1_roll_dev <- (
   )
 )
 ```
-
 
 ```{r}
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")

@@ -22,7 +22,7 @@ library(patchwork)
 # Folder Structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
-proc_data_dir <- root("data/processed")
+model_data_dir <- root("data/processed/model_data")
 fig_dir <- root("figures")
 dir.create(fig_dir, showWarnings = FALSE)
 mod_dir <- root("models")
@@ -46,16 +46,18 @@ label_map <- c(
   work = "Has worked",
   rural = "Rural area",
   log_pop_density = "Population density",
-  clim = "Climate factor"
+  clim = "Climate factor",
+  food_stress_12m = "Food Price Stress"
 )
 
 # Var settings
-clim_var <- "dev_value_utci_days_above_32_daily_max_sum_12m"
+# clim_var <- "dev_value_utci_days_above_32_daily_max_sum_12m"
+clim_var <- "dev_value_weighted_utci_max_above_32_12m"
 covars_fem <- c(
   "country",
   "cluster",
-  "adm1_name",
-  "rural",
+  # "adm1_name",
+  # "rural",
   "log_pop_density",
   "work",
   "live_with_partner",
@@ -67,11 +69,11 @@ vars_fem <- c(covars_fem, "clim")
 covars_ch <- c(
   "country",
   "cluster",
-  "adm1_name",
-  "rural",
+  # "adm1_name",
+  # "rural",
   "log_pop_density",
   "in_school",
-  "live_with_partner",
+  # "live_with_partner",
   "live_with_father",
   "tolerate_women_violence",
   "sv",
@@ -80,20 +82,23 @@ covars_ch <- c(
 vars_ch <- c(covars_ch, "clim")
 
 bin_cov_fem <- c(
-  # "rural", 
+  "rural",
   "work", 
   # "in_school",
   "live_with_partner", 
   "tolerate_women_violence"
 )
 bin_cov_ch <- c(
-  # "rural",
+  "rural",
   "in_school", 
-  "live_with_partner",
+  # "live_with_partner",
   "live_with_father", 
   "tolerate_women_violence"
 )
-cont_covs <- c("log_pop_density", "clim")
+cont_covs <- c(
+  "log_pop_density",
+  "clim"
+)
 ```
 
 # Functions
@@ -406,14 +411,18 @@ plot_continuous_marginal <- function(df_summary, covar_label = NULL, lims = NULL
 df_clim_viol <- (
   read_csv(
     file.path(
-      proc_data_dir,
-      "climate_violence_new_vacs.csv"
+      model_data_dir,
+      # "climate_violence_new_vacs.csv"
+      "climate_food_prices_violence.csv"
     ),
     show_col_type = FALSE
   )
   %>% mutate(
     clim := scale(!!sym(clim_var)),
     log_pop_density = scale(log_pop_density)
+  )
+  %>% filter(
+    country != "Kenya"
   )
 )
 ```
@@ -434,7 +443,7 @@ df_model_ch <- (
   df_clim_viol
   %>% filter(
     female == 1,
-    age < 17
+    age < 19
   )
   %>% select(all_of(vars_ch))
   %>% na.omit()
@@ -457,28 +466,68 @@ form_fem_all_viol <- bf(
     # + rural
     + log_pop_density
     + clim
-    + (1 + clim | country/cluster)
-    # + (1 + clim | country/adm1_name)
+    + (1 | country/cluster)
+    # + (1 + clim | country/cluster)
+    # + (1 + clim || country/adm1_name)
   )
 )
 fit_fem_all_viol <- brm(
   formula = form_fem_all_viol,
   family = bernoulli("logit"),
   prior = c(
-    prior(student_t(6, -4, 1), class = "Intercept"),
-    prior(normal(0, 0.2), class = "b"),
-    prior(normal(0, 0.2), class = "sd")
+    prior(normal(-1, 1), class = "Intercept"),
+    prior(normal(0, 0.5), class = "b"),
+    prior(normal(0, 0.5), class = "sd")
   ),
   data = df_model_fem,
   seed = seed,
+  # algorithm = "meanfield",
+  refresh = 1000,
   # sample_prior = "only"
 )
 ```
 
-#### Prior Predictive
+#### Prior Checks
+
+Build test data
 
 ```{r}
-pp_check(fit_fem_all_viol)
+test_data <- expand.grid(
+  rural = unique(df_model_fem$rural),
+  work = unique(df_model_fem$rural),
+  live_with_partner = unique(df_model_fem$live_with_partner),
+  tolerate_women_violence = unique(df_model_fem$tolerate_women_violence),
+  clim = seq(
+    min(df_model_fem$clim),
+    max(df_model_fem$clim),
+    length.out = 20
+  )
+)
+```
+
+
+```{r}
+prior_epred_fem_all_viol <- (
+  fit_fem_all_viol
+  %>% epred_draws(
+    newdata = test_data,
+    re_formula = ~0
+  )
+)
+```
+
+
+```{r}
+(
+  prior_epred_fem_all_viol
+  %>% ggplot(
+    aes(
+      x = .epred,
+      height = after_stat("density")
+    )
+  )
+  + geom_density()
+)
 ```
 
 #### Model Output
@@ -503,9 +552,8 @@ inter_fem_all_viol <- (
 )
 ```
 
-
 ```{r}
-#| fig-width: 6.5
+#| fig-width: 5
 #| fig-height: 3.5
 (
   ggplot(
@@ -521,9 +569,12 @@ inter_fem_all_viol <- (
     color = "black",
     fill = col_palette[2],
     adjust = 1.0,
+    p_limits = c(0.02, 0.9),
+    normalize = "panels",
+    trim = TRUE
   )
   + scale_x_continuous(
-    limits = c(0.018, 0.17),
+    limits = c(0.018, 0.18),
     labels = scales::percent
   )
   + labs(
@@ -563,6 +614,7 @@ ranef_fem_all_viol_names <- names(ranefs_fem_all_viol)
 ```{r}
 df_ranefs_country_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country"]], group_name = "country")
 df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:cluster"]], group_name = "cluster")
+# df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:adm1_name"]], group_name = "adm1_name")
 df_ranefs_groups_fem_all_viol <- bind_rows(df_ranefs_country_fem_all_viol, df_ranefs_cluster_fem_all_viol)
 ```
 
@@ -650,7 +702,7 @@ expected_diffs_fem_all_viol_stats <- create_df_marginal_differences_stats(expect
 ```
 
 ```{r}
-#| fig-width: 7
+#| fig-width: 5
 #| fig-height: 3
 
 plot_bin_marginal(expected_diffs_fem_all_viol, expected_diffs_fem_all_viol_stats, lims = c(-0.09, 0.09))
@@ -667,9 +719,9 @@ df_marg_cont_fem_all_viol <- generate_marginal_df(fit_fem_all_viol, df_model_fem
 ```
 
 ```{r}
-#| fig-width: 7
+#| fig-width: 4.5
 #| fig-height: 3
-plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Population density", lims = c(0.01, 0.25))
+plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Population density", lims = c(0.01, 0.20))
 
 ggsave(
   path = fig_dir,
@@ -678,9 +730,9 @@ ggsave(
 ```
 
 ```{r}
-#| fig-width: 7
+#| fig-width: 4.5
 #| fig-height: 3
-plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Climate factor", lims = c(0.02, 0.25))
+plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Climate factor", lims = c(0.001, 0.40))
 
 ggsave(
   path = fig_dir,
@@ -709,12 +761,14 @@ fit_fem_np_viol <- brm(
   formula = form_fem_np_viol,
   family = bernoulli("logit"),
   prior = c(
-    prior(student_t(6, -4, 1), class = "Intercept"),
-    prior(normal(0, 0.2), class = "b"),
-    prior(normal(0, 0.2), class = "sd")
+    # prior(student_t(6, -4, 1), class = "Intercept"),
+    prior(normal(-4, 0.5), class = "Intercept"),
+    prior(normal(0, 0.1), class = "b"),
+    prior(normal(0, 0.1), class = "sd")
   ),
   data = df_model_fem,
   seed = seed,
+  refresh = 1000,
   # sample_prior = "only"
 )
 ```

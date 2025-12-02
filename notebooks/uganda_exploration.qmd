@@ -189,7 +189,6 @@ commodities_to_plot <- c("Maize (white)", "Maize flour", "Cassava flour", "Sorgh
 
 ## Geometries
 
-
 ```{r load_data geom}
 # Sys.setenv(SHAPE_RESTORE_SHX='YES')
 sf_uga <- (
