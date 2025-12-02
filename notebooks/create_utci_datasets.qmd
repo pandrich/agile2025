@@ -29,7 +29,7 @@ coords <- list(
   "LSO" = "-28.42.29.65.-30.78.26.85",
   "NAM" = "-16.84.25.28.-29.04.11.72",
   "ZMB" = "-8.2.33.7.-18.08.21.98",
-  "UGA" = "4.25.35.04.-1.49.29.55",
+  "UGA" = "4.45.35.24.-1.69.29.35",
   "KEN" = "5.1.41.92.-4.74.33.84"
 )
 ```
@@ -37,8 +37,8 @@ coords <- list(
 # Functions
 
 ```{r}
-build_utci_ts_country <- function(iso3, rast_pop, adm_pop, adm_shapes) {
-  years_folder <- list.files(file.path(raw_data_dir, "UTCI", iso3))
+build_utci_monthly_country <- function(iso3, rast_pop, adm_pop, adm_shapes) {
+  years_folder <- list.files(file.path(raw_data_dir, "UTCI", "monthly", iso3))
   dfs <- list()
   i <- 0
   for (yf in years_folder) {
@@ -50,8 +50,9 @@ build_utci_ts_country <- function(iso3, rast_pop, adm_pop, adm_shapes) {
         file.path(
           raw_data_dir, 
           "UTCI", 
+          "monthly",
           iso3, 
-          paste0("UTCI_", iso3, "_", year), 
+          paste0("utci_monthly_", iso3, "_", year), 
           paste0("ECMWF_utci_monthly_stats_", year, m, "_v1.1_con.area-subset.", coords[iso3], ".nc")
         )
       )
@@ -510,17 +511,41 @@ Data obtained using the Climate Data Store API
 
 ### Method Outline
 
+#### Combine all datasets
+
+
+```{r}
+# rast_root_dir <- file.path(raw_data_dir, "UTCI/monthly/MOZ")
+# rast_files <- unlist(lapply(root_dir, function(d) {
+#   list.files(d, pattern = "^ECMWF_utci_monthly_stats", full.names = TRUE, recursive = TRUE)
+# }))
+# rast_list <- lapply(rast_files, function(f) {
+#   r <- terra::rast(f)
+#   r
+# })
+# utci_moz_rast <- do.call(c, rast_list)
+# names(utci_moz_rast) <- paste0(
+#   names(utci_moz_rast), 
+#   "_", 
+#   sapply(terra::time(utci_moz_rast), function(d) str_split_i(d, " ", 1))
+# )
+```
+
+
+#### Generate polygons
+
 ```{r}
 utci_moz_rast <- terra::rast(
   file.path(
     raw_data_dir,
     "UTCI",
+    "monthly",
     "MOZ",
     paste0("UTCI_", "MOZ", "_", "2024"),
     paste0("ECMWF_utci_monthly_stats_", "2024", "01", "_v1.1_con.area-subset.", coords["MOZ"], ".nc")
     )
   )
-utci_moz_poly <- utci_moz_rast %>% terra::as.polygons(values = FALSE, dissolve = FALSE)
+utci_moz_poly <- utci_moz_rast[[1]] %>% terra::as.polygons(values = FALSE, dissolve = FALSE)
 ```
 
 #### UTCI Grid
@@ -662,6 +687,8 @@ terra::values(utci_moz_weighted) <- utci_moz_weighted_mat
 
 utci_moz_weighted_cropped <- (
   utci_moz_weighted
+  [[terra::names(utci_moz_rast) == "utci_days_above_32_daily_max"]]
+  [[1]]
   # %>% terra::crop(terra::ext(c(30.3, 35.3, -17.7, -14)))
   %>% terra::crop(terra::ext(32.5, 33.5, -14.8, -13.8))
 )
@@ -846,7 +873,7 @@ utci_zmb <- build_utci_ts_country("ZMB", rast_pop_zmb_2022, adm1_pop_zmb_2022, s
 ### Uganda
 
 ```{r}
-utci_uga <- build_utci_ts_country("UGA", rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
+utci_uga <- build_utci_monthly_country("UGA", rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
 ```
 
 ### Kenya

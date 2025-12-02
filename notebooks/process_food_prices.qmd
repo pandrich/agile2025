@@ -1,0 +1,514 @@
+---
+title: "Process Food Prices"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(paletteer)
+library(spdep)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/food_prices")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+
+# Settings
+nb_name <-  "Process Food Prices"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Country Mapping
+country_map <- c(
+  "MOZ" = "Mozambique",
+  "ZWE" = "Zimbabwe",
+  "LSO" = "Lesotho",
+  "NAM" = "Namibia",
+  "ZMB" = "Zambia",
+  "UGA" = "Uganda",
+  "KEN" = "Kenya"
+)
+```
+
+
+# Functions
+
+```{r}
+neighbors_at_hop <- function(nb_list, start_idx, h) {
+  if (h <= 0) return (integer(0))
+  if (h == 1) return (nb_list[[start_idx]])
+  visited <- integer(0)
+  frontier <- unique(nb_list[[start_idx]])
+  if (length(frontier) == 0) return(integer(0))
+  step <- 1
+  # We reconstruct the frontier for starting index `start_idx` after step h
+  while (step < h) {
+    step <- step + 1
+    next_nodes <- if (length(frontier) > 0) unique(unlist(nb_list[frontier], use.names = FALSE)) else integer(0)
+    # remove already seen and current frontier to advance
+    next_frontier <- setdiff(next_nodes, c(visited, frontier))
+    if (length(next_frontier) == 0) return(integer(0))
+    visited <- c(visited, frontier)
+    frontier <- next_frontier
+  }
+  setdiff(frontier, start_idx)
+}
+```
+
+
+# Load Data
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Uganda
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+    sf_uga,
+    sf_ken
+  )
+  %>% st_make_valid()
+)
+```
+
+
+
+```{r}
+nb_moz <- spdep::poly2nb(sf_moz)
+```
+
+
+
+
+## Crop cycles
+
+```{r}
+df_crops <- (
+  read_csv(
+    file.path(
+      raw_data_dir, 
+      "crop",
+      "harvestStat",
+      "hvstat_africa_data_v1.0.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    crop_production_system = if_else(
+      country %in% c("Uganda", "Zambia"),
+      "All (PS)",
+      crop_production_system
+    )
+  )
+  %>% filter(
+    country %in% country_map,
+    qc_flag == 0,
+    product %in% c("Maize", "Sorghum", "Wheat", "Cassava", "Millet", "Rice", "Sweet Potatoes", "Potato", "Banana"),
+    !is.na(production),
+    harvest_year >= 2000,
+    crop_production_system == "All (PS)"
+  )
+  %>% group_by(country, admin_1, product)
+  %>% summarise(
+    production = sum(production, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% group_by(country, admin_1)
+  %>% slice_max(
+    order_by = production,
+    n = 1,
+    with_ties = FALSE,
+  )
+  %>% ungroup()
+  %>% rename(
+    adm_name = admin_1
+  )
+)
+```
+
+```{r}
+df_crops
+```
+
+Maize is usually the most commom product. For simplicity we use this to track price changes
+
+## Food Prices
+
+Data from: https://data.humdata.org/dataset/global-wfp-food-prices
+
+Not all districts are represented
+
+```{r load data}
+food_prices_files <- list.files(file.path(raw_data_dir, "food_prices", "wfp_food_prices", fsep = "/"))
+list_maize_prices <- list()
+for (i in seq(length(food_prices_files))) {
+  list_maize_prices[[i]] <- (
+    read_csv(
+      file.path(raw_data_dir, "food_prices", "wfp_food_prices", food_prices_files[i], fsep = "/"),
+      show_col_types = FALSE
+    )
+    %>% filter(
+      pricetype == "Retail",
+      !is.na(latitude),
+      category %in% c("cereals and tubers", "pulses and nuts", "vegetables and fruits"),
+      (
+        (commodity == "Maize (white)" & countryiso3 %in% c("KEN", "MOZ", "UGA", "ZMB"))
+        | (commodity == "Maize" & countryiso3 == "ZWE")
+        | (commodity == "Maize meal" & countryiso3 %in% c("LSO", "NAM"))
+      )
+      # commodity %in% c("Maize meal", "Maize flour")
+    )
+    %>% mutate(
+      admin2 = str_replace(admin2, " Municipality", "")
+    )
+  )
+}
+```
+
+```{r}
+sf_food_prices <- (
+  bind_rows(list_maize_prices)
+  %>% filter(
+    countryiso3 %in% names(country_map)
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    latitude = as.numeric(latitude),
+    longitude = as.numeric(longitude),
+    food_price_kg = case_when(
+      unit == "400 G" ~ as.numeric(usdprice) * 2.5,
+      unit == "KG" ~ as.numeric(usdprice),
+      unit == "5 KG" ~ as.numeric(usdprice) / 5,
+      unit == "12.5 KG" ~ as.numeric(usdprice) / 12.5,
+      unit == "Tin (20L)" ~ as.numeric(usdprice) / 15,
+      unit == "25 KG" ~ as.numeric(usdprice) / 25
+    )
+  )
+  %>% st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326
+  )
+  %>% select(
+    countryiso3,
+    date,
+    food_price_kg
+  )
+)
+```
+
+
+# Combine data
+
+```{r}
+df_food_prices_adm <- (
+  sf_food_prices
+  %>% st_join(
+    sf_all,
+    join = st_nearest_feature,
+    left = TRUE
+  )
+  %>% arrange(
+    country,
+    adm_code,
+    adm_name,
+    date
+  )
+  %>% as_tibble()
+  %>% group_by(
+    country, 
+    adm_code, 
+    adm_name, 
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    food_price_kg = mean(food_price_kg, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+
+```{r}
+sf_all_dates <- (
+  df_food_prices_adm
+  %>% distinct(country, date)
+  %>% merge(
+    sf_all,
+    by = "country",
+    all.x = TRUE
+  )
+  %>% st_as_sf()
+)
+```
+
+```{r}
+sf_food_prices_adm_all_dates <- (
+  sf_all_dates
+  %>% merge(
+    df_food_prices_adm,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% arrange(
+    country,
+    adm_code,
+    adm_name,
+    date
+  )
+)
+```
+
+```{r}
+neighbors_at_hop <- function(nb_list, start_idx, h) {
+  if (h <= 0) return (integer(0))
+  if (h == 1) return (nb_list[[start_idx]])
+  visited <- integer(0)
+  frontier <- unique(nb_list[[start_idx]])
+  if (length(frontier) == 0) return(integer(0))
+  step <- 1
+  # We reconstruct the frontier for starting index `start_idx` after step h
+  while (step < h) {
+    step <- step + 1
+    next_nodes <- if (length(frontier) > 0) unique(unlist(nb_list[frontier], use.names = FALSE)) else integer(0)
+    # remove already seen and current frontier to advance
+    next_frontier <- setdiff(next_nodes, c(visited, frontier))
+    if (length(next_frontier) == 0) return(integer(0))
+    visited <- c(visited, frontier)
+    frontier <- next_frontier
+  }
+  setdiff(frontier, start_idx)
+}
+```
+
+
+```{r}
+max_hops <- 3
+iterative <- TRUE
+
+sf_food_prices_adm_all_dates$.rowid_fill <- seq_len(nrow(sf_food_prices_adm_all_dates))
+countries <- sf_food_prices_adm_all_dates$country %>% unique()
+nb_by_country <- setNames(vector("list", length(countries)), countries)
+
+for (ct in countries) {
+  sf_df_country <- sf_food_prices_adm_all_dates %>% filter(country == ct)
+  dates_ct <- sf_df_country$date %>% unique()
+  first_block <- sf_df_country %>% filter(date == dates_ct[[1]])
+  nb_by_country[[ct]] <- poly2nb(first_block, queen = TRUE)
+}
+
+sf_food_prices_adm_interp <- (
+  sf_food_prices_adm_all_dates
+  %>% group_by(country, date)
+  %>% group_modify(~ {
+    g <- .x
+    ct_val <- g[["country"]][1]
+    nb <- nb_by_country[[ct_val]]
+    vals <- g[["food_price_kg"]]
+    nas <- which(is.na(vals))
+    if (length(nas) > 0) {
+        for (i in nas) {
+          for (h in 1:max_hops) {
+            candidates <- neighbors_at_hop(nb, i, h)
+            if (length(candidates) == 0L) next
+            cand_vals <- vals[candidates]
+            cand_vals <- cand_vals[!is.na(cand_vals)]
+            if (length(cand_vals) > 0L) {
+              vals[i] <- mean(cand_vals)
+              break
+            }
+          }
+        }
+      g[["food_price_kg"]] <- vals
+    }
+    g %>% select(-c(country, date))
+  }, .keep = TRUE)
+  %>% ungroup()
+)
+
+sf_food_prices_adm_interp <- (
+  sf_food_prices_adm_interp[order(sf_food_prices_adm_interp$.rowid_fill), ]
+  %>% select(-.rowid_fill)
+  %>% st_as_sf()
+)
+```
+
+```{r}
+df_food_prices_adm_12m <- (
+  sf_food_prices_adm_interp
+  %>% as_tibble()
+  %>% arrange(country, adm_code, adm_name, date)
+  %>% group_by(country, adm_code, adm_name)
+  %>% mutate(
+    mean_price = mean(food_price_kg, na.rm = TRUE),
+    sd_price = sd(food_price_kg, na.rm = TRUE),
+    max_food_price_kg_12m = slider::slide_index_dbl(
+      .x = food_price_kg,
+      .i = date,
+      .f = ~ if (sum(!is.na(.x)) == 0) NA else max(.x, na.rm = TRUE),
+      .before = ~ .x %m-% months(12),
+      .complete = FALSE
+    )
+  )
+  %>% ungroup()
+  %>% mutate(
+    food_price_dev_12m = (max_food_price_kg_12m - mean_price) / sd_price,
+    food_stress_12m = as.integer(food_price_dev_12m > 1)
+  )
+  %>% as.data.frame()
+  %>% select(-geometry)
+)
+```
+
+# Save
+
+```{r}
+df_food_prices_adm_12m %>% write_csv(file.path(proc_data_dir, "food_prices_adm_12m.csv"))
+```
+

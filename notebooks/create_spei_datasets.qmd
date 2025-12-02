@@ -42,7 +42,7 @@ coords <- list(
 ```{r}
 build_spei_ts_country <- function(iso3, spei_rast, pop_rast, adm_pop, adm_shapes, start_date) {
   rast_times <- terra::time(spei_rast)
-  start_index <- match(start_date, rast_times)
+  start_index <- which(rast_times >= start_date)[1]
   n_layers <- terra::nlyr(spei_rast)
   spei_iso_rast  <- (
     spei_rast[paste0("spei_", n_layers)]
@@ -123,7 +123,7 @@ build_spei_ts_country <- function(iso3, spei_rast, pop_rast, adm_pop, adm_shapes
   }
   df <- (
     bind_rows(dfs)
-    %>% rename(adm1_code = ID)
+    %>% rename(adm_code = ID)
   )
   df %>% write_csv(file.path(proc_data_dir, paste0("spei_", iso3, ".csv")))
   df
@@ -217,25 +217,51 @@ sf_zmb <- (
 ### Uganda
 
 ```{r}
+# sf_uga <- (
+#   st_read(
+#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
+#     layer = "uga_admbnda_adm2_ubos_20200824"
+#   )
+#   %>% rename_with(tolower)
+#   %>% mutate(
+#     id = row_number()
+#   )
+#   %>% select(
+#     id,
+#     adm1_name = admin1name_en,
+#     adm2_name = admin2name_en,
+#     adm2_pcode = admin2pcode,
+#     # adm3_name = admin3name_en,
+#     # adm4_name = admin4name_en,
+#     # adm4_pcode = admin4pcode,
+#     geometry = shape
+#   )
+# )
 sf_uga <- (
   st_read(
-    file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
-    layer = "uga_admbnda_adm2_ubos_20200824"
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
   )
   %>% rename_with(tolower)
+  # %>% mutate(
+  #   district = str_to_title(district)
+  # )
   %>% mutate(
-    id = row_number()
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
   )
   %>% select(
-    id,
-    adm1_name = admin1name_en,
-    adm2_name = admin2name_en,
-    adm2_pcode = admin2pcode,
-    # adm3_name = admin3name_en,
-    # adm4_name = admin4name_en,
-    # adm4_pcode = admin4pcode,
-    geometry = shape
+    id = objectid,
+    adm2_name = district
   )
+  %>% st_transform(4326)
 )
 ```
 
@@ -716,7 +742,7 @@ ggsave(
 #### Weighted SPEI
 
 ```{r}
-adm1_spei_month <- (
+adm_spei_month <- (
   spei_moz_weighted
   %>% terra::extract(
     sf_moz,
@@ -733,7 +759,7 @@ adm1_spei_month <- (
     across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
   )
   %>% mutate(
-    pop = adm1_pop_moz_2022$pop,
+    pop = adm_pop_moz_2022$pop,
     date = ceiling_date(as.Date(paste0("2024", "-", "01", "-", "01"), format = "%Y-%m-%d"), "month") - days(1)
   )
   %>% mutate(
@@ -747,10 +773,10 @@ adm1_spei_month <- (
 ```
 
 ```{r}
-sf_adm1_spei_month <- (
+sf_adm_spei_month <- (
   sf_moz
   %>% merge(
-    adm1_spei_month,
+    adm_spei_month,
     by = "adm1_code",
     all.x = TRUE
   )
@@ -763,7 +789,7 @@ sf_adm1_spei_month <- (
 (
   ggplot()
   + geom_sf(
-    data = sf_adm1_spei_month %>% filter(adm1_name != "Maputo City"),
+    data = sf_adm_spei_month %>% filter(adm1_name != "Maputo City"),
     mapping = aes(fill = spei_905),
     color = "black",
   )
@@ -804,25 +830,25 @@ ggsave(
 ### Mozambique
 
 ```{r}
-spei_moz <- build_spei_ts_country("MOZ", spei_rast, rast_pop_moz_2022, adm1_pop_moz_2022, sf_moz, "2000-01-01")
+spei_moz <- build_spei_ts_country("MOZ", spei_rast, rast_pop_moz_2022, adm_pop_moz_2022, sf_moz, "2000-01-01")
 ```
 
 ### Zimbabwe
 
 ```{r}
-spei_zwe <- build_spei_ts_country("ZWE", spei_rast, rast_pop_zwe_2022, adm1_pop_zwe_2022, sf_zwe, "2000-01-01")
+spei_zwe <- build_spei_ts_country("ZWE", spei_rast, rast_pop_zwe_2022, adm_pop_zwe_2022, sf_zwe, "2000-01-01")
 ```
 
 ### Lesotho
 
 ```{r}
-spei_lso <- build_spei_ts_country("LSO", spei_rast, rast_pop_lso_2022, adm1_pop_lso_2022, sf_lso, "2000-01-01")
+spei_lso <- build_spei_ts_country("LSO", spei_rast, rast_pop_lso_2022, adm_pop_lso_2022, sf_lso, "2000-01-01")
 ```
 
 ### Namibia
 
 ```{r}
-spei_nam <- build_spei_ts_country("NAM", spei_rast, rast_pop_nam_2022, adm1_pop_nam_2022, sf_nam, "2000-01-01")
+spei_nam <- build_spei_ts_country("NAM", spei_rast, rast_pop_nam_2022, adm_pop_nam_2022, sf_nam, "2000-01-01")
 
 ```
 
@@ -835,7 +861,7 @@ spei_zmb <- build_spei_ts_country("ZMB", spei_rast, rast_pop_zmb_2022, adm1_pop_
 ### Uganda
 
 ```{r}
-spei_uga <- build_spei_ts_country("UGA", spei_rast, rast_pop_uga_2022, adm2_pop_uga_2022, sf_uga, "2000-01-01")
+spei_uga <- build_spei_ts_country("UGA", spei_rast, rast_pop_uga_2022, adm_pop_uga_2022, sf_uga, "2000-01-01")
 ```
 
 ### Kenya

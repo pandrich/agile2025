@@ -1,5 +1,5 @@
 ---
-title: "Combine Climate and Violence Data - New VACS"
+title: "Combine climate data from daily sources, food prices, and violence data"
 format: html
 editor: visual
 ---
@@ -15,28 +15,87 @@ library(sf)
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
 proc_data_dir <- root("data/processed")
+model_data_dir <- root(proc_data_dir, "model_data")
+dir.create(model_data_dir, showWarnings = FALSE)
 fig_dir <- root("figures")
 dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
 viol_file <- sort(list.files(file.path(proc_data_dir, "VACS_clean"), pattern = "vacs_clean", full.names = TRUE), decreasing = TRUE)[[1]]
 
 # Settings
-nb_name <-  "Build climate-violence dataset - new"
+nb_name <-  "Build final dataset"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 set.seed(seed)
 ```
 
 # Import data
 
+## Population
+
+```{r}
+df_pop <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "population",
+      "adm_pop_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% select(
+    country,
+    adm_code,
+    adm_name,
+    log_pop_density
+  )
+)
+```
+
+
+
 ## Climate
+
+The dataset contains entries for each day. To match it with the violence data we calculate the mean over all the entries in each month. 
+This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
 
 ```{r}
 df_clim <- (
   read_csv(
-    file.path(proc_data_dir, "processed_utci_spei.csv"),
+    file.path(proc_data_dir, "processed_utci_temp_daily.csv"),
     show_col_types = FALSE
+  )
+  %>% group_by(
+    country,
+    adm_code,
+    adm_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    across(everything(), ~ mean(., na.rm = TRUE)),
+    .groups = "drop"
   )
 )
 ```
+
+## Food prices
+
+```{r}
+df_food_prices <- (
+  read_csv(
+    file.path(proc_data_dir, "food_prices", "food_prices_adm_12m.csv"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    country,
+    adm_code,
+    adm_name,
+    date,
+    food_price_dev_12m,
+    food_stress_12m
+  )
+)
+```
+
 
 ## Violence
 
@@ -47,8 +106,6 @@ df_viol <- (
     show_col_types = FALSE
   )
   %>% filter(
-    # female == 1,
-    # age <=17
     !is.na(date),
   )
   %>% select(
@@ -57,34 +114,64 @@ df_viol <- (
   %>% mutate(
     date = ceiling_date(as.Date(date, format = "%Y-%m-%d"), "month") - days(1)
   )
+  %>% rename(
+    adm_code = adm1_code
+  )
 )
 ```
 
 # Combine datasets
 
 ```{r}
-df_clim_viol <- (
+df_clim_fp_viol <- (
   df_viol
+  %>% merge(
+    df_pop,
+    by = c(
+      "country",
+      "adm_code"
+    ),
+    all.x = TRUE
+  )
   %>% merge(
     df_clim,
     by = c(
       "country", 
-      "adm1_code",
+      "adm_code",
+      "adm_name",
       "date"
     ),
     all.x = TRUE
   )
-  # %>% select(-adm1_code)
+  %>% merge(
+    df_food_prices,
+    by = c(
+      "country",
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% select(-adm_code)
 )
 ```
+
+```{r}
+(
+  df_clim_fp_viol
+  %>% filter(is.na(food_price_dev_12m))
+)
+```
+
 
 ```{r}
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
 (
   ggplot(
-    data = df_clim_viol, 
+    data = df_clim_fp_viol, 
     aes(
-      x = dev_value_utci_days_above_32_daily_max_sum_12m, 
+      x = dev_value_weighted_utci_max_above_32_12m, 
       fill = country
     ),
     color = "black"
@@ -113,19 +200,5 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
 ```
 
 ```{r}
-(
-  df_clim 
-  %>% filter(
-    country == "Kenya",
-    date == "2018-12-31"
-  )
-)
-```
-
-```{r}
-colSums(is.na(df_clim_viol %>% filter(country == "Kenya")))
-```
-
-```{r}
-df_clim_viol %>% write_csv(file.path(proc_data_dir, "model_data", "climate_violence_new_vacs.csv"))
+df_clim_fp_viol %>% write_csv(file.path(model_data_dir, "climate_food_prices_violence.csv"))
 ```

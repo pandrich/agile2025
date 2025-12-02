@@ -1,0 +1,567 @@
+---
+title: "UTCI Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+fig_dir <- root("figures")
+```
+
+
+# Functions
+
+```{r}
+build_weighted_rainfall_rast <- function(rain_rast, pop_rast) {
+  rain_poly <- (
+    rain_rast
+    %>% terra::as.polygons(values = FALSE, dissolve = FALSE, na.rm = FALSE)
+  )
+  pop_sum <- (
+    terra::extract(
+      pop_rast,
+      rain_poly,
+      na.rm = TRUE,
+      cells = TRUE,
+      exact = TRUE
+    )
+    %>% group_by(cell)
+    %>% mutate(
+      fraction = fraction / sum(fraction, na.rm = TRUE)
+    )
+    %>% group_by(ID)
+    %>% summarise(
+      pop = sum(pop * fraction, na.rm = TRUE)
+    )
+  )
+  rain_weighted_mat <- terra::values(rain_rast, mat = TRUE) * pop_sum$pop
+  rain_weighted <- terra::rast(rain_rast)
+  terra::values(rain_weighted) <- rain_weighted_mat
+  
+  rain_weighted
+}
+  
+build_weighted_adm_rainfall_df <- function(rain_rast_weighted, adm_pop, adm_shapes) {
+  
+  rast_times <- terra::time(rain_rast_weighted)
+  
+  adm_rain_weighted <- (
+    rain_rast_weighted
+    %>% terra::extract(
+      adm_shapes,
+      cells = TRUE,
+      na.rm = TRUE,
+      exact = TRUE
+    )
+    %>% group_by(cell)
+    %>% mutate(
+      fraction = fraction / sum(fraction, na.rm = TRUE)
+    )
+    %>% group_by(ID)
+    %>% summarise(
+      across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
+    )
+    %>% mutate(
+      pop = adm_pop$pop,
+    )
+    %>% mutate(
+      across(-c(ID, pop), ~ (.)/pop)
+    )
+    %>% as.data.frame()
+    %>% rename(
+      id = ID
+    )
+    %>% select(-pop)
+  )
+  names(adm_rain_weighted) <- c("id", as.character(rast_times))
+  
+  adm_rain_weighted <- (
+    adm_rain_weighted
+    %>% pivot_longer(
+      cols = -id,
+      names_to = "date",
+      values_to = "rainfall"
+    )
+    %>% mutate(
+      date = as.Date(date)
+    )
+  )
+  
+  df_adm_rain_weighted <- (
+    adm_shapes
+    %>% merge(
+      adm_rain_weighted,
+      by = "id",
+      all.x = TRUE
+    )
+    %>% as.data.frame()
+    %>% select(-c(id, geometry))
+  )
+  df_adm_rain_weighted
+}
+```
+
+# Data Import
+
+## Geographies
+
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    id = objectid,
+    adm2_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+
+## Population
+
+
+```{r}
+rast_pop_uga_2022 <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2022_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2022_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_uga_2022 <- (
+  rast_pop_uga_2022
+  %>% terra::extract(
+    sf_uga,
+    na.rm = TRUE,
+    cells = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+```
+
+## Rainfall
+
+```{r}
+rain_uga_rast <- terra::rast(
+  file.path(
+    raw_data_dir,
+    "rainfall",
+    "rainfall_UGA.nc"
+  )
+)
+```
+
+
+# Dataset Creation
+
+Data obtained using the Climate Data Store API
+
+## Method Outline
+
+```{r}
+rain_uga_poly <- rain_uga_rast %>% terra::as.polygons(values = FALSE, dissolve = FALSE, na.rm = FALSE)
+```
+
+### Rainfall Grid
+
+```{r}
+(
+  ggplot()
+  + geom_sf(
+    data = rain_uga_poly,
+    fill = NA,
+    color = "gray"
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    title = "Rainfall Grid",
+  )
+  # + coord_sf(
+  #   xlim = c(30.3, 35.3),
+  #   ylim = c(-14, -17.7)
+  # )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_grid_uga.png",
+  width = 3,
+  height = 5
+)
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 4
+
+rain_uga_rast_cropped <- (
+  rain_uga_rast
+  %>% terra::crop(terra::ext(33.5, 35.05, -0.01, 2.37))
+)
+
+(
+  ggplot()
+  + geom_spatraster(
+    data = rain_uga_rast_cropped,
+    mapping = aes(fill = precipitation_amount_503)
+  )
+  + scale_fill_paletteer_c(
+    "scico::bilbao",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = rain_uga_poly,
+    fill = NA,
+    color = "gray",
+    linewidth = 1.3
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(33.7, 34.8),
+    ylim = c(0.4, 1.6)
+  )
+  + labs(
+    fill = "Rainfall * Population"
+  )
+)
+```
+
+### UTCI Grid Zoom In
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_uga_2022 %>% terra::crop(terra::ext(33.5, 35.05, -0.01, 2.37)),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = rain_uga_poly,
+    fill = NA,
+    color = "gray",
+    linewidth = 1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(33.7, 34.8),
+    ylim = c(0.4, 1.6)
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_grid_uga_zoom_pop.png",
+  width = 5,
+  height = 4
+)
+```
+
+### Rainfall x population
+
+```{r}
+pop_sum <- (
+  terra::extract(
+    rast_pop_uga_2022,
+    rain_uga_poly,
+    cells = TRUE,
+    na.rm = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    pop = sum(pop * fraction, na.rm = TRUE)
+  )
+)
+rain_uga_weighted_mat <- terra::values(rain_uga_rast, mat = TRUE) * pop_sum$pop
+rain_uga_weighted <- terra::rast(rain_uga_rast)
+terra::values(rain_uga_weighted) <- rain_uga_weighted_mat
+```
+
+```{r}
+#| fig-width: 6.5
+#| fig-height: 4
+
+rain_uga_weighted_cropped <- (
+  rain_uga_weighted
+  %>% terra::crop(terra::ext(33.5, 35.05, -0.01, 2.37))
+)
+
+(
+  ggplot()
+  + geom_spatraster(
+    data = rain_uga_weighted_cropped,
+    mapping = aes(fill = precipitation_amount_503)
+  )
+  + scale_fill_paletteer_c(
+    "scico::bilbao",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = rain_uga_poly,
+    fill = NA,
+    color = "gray",
+    linewidth = 1.3
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(33.7, 34.8),
+    ylim = c(0.4, 1.6)
+  )
+  + labs(
+    fill = "Rainfall * Population"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+### Weighted rainfall
+
+```{r}
+adm_rain <- (
+  rain_uga_weighted
+  %>% terra::extract(
+    sf_uga,
+    cells = TRUE,
+    na.rm = TRUE,
+    exact = TRUE
+  )
+  %>% group_by(cell)
+  %>% mutate(
+    fraction = fraction / sum(fraction, na.rm = TRUE)
+  )
+  %>% group_by(ID)
+  %>% summarise(
+    across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
+  )
+  %>% mutate(
+    pop = adm_pop_uga_2022$pop,
+    date = ceiling_date(as.Date(paste0("2024", "-", "01", "-", "01"), format = "%Y-%m-%d"), "month") - days(1)
+  )
+  %>% mutate(
+    across(-c(ID, pop, date), ~ (.)/pop)
+  )
+  %>% as.data.frame()
+  %>% rename(
+    id = ID
+  )
+)
+```
+
+```{r}
+sf_adm_rain <- (
+  sf_uga
+  %>% merge(
+    adm_rain,
+    by = "id",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_adm_rain,
+    mapping = aes(fill = precipitation_amount_503),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted rainfall Index",
+    subtitle = "January 2024",
+    fill = "# days UTCI max > 32"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_weighted_uga.png",
+  width = 4,
+  height = 5
+)
+```
+
+
+## Build datasets
+
+```{r}
+rain_uga_rast_weighted <- build_weighted_rainfall_rast(rain_uga_rast, rast_pop_uga_2022)
+```
+
+```{r}
+rain_uga_df <- build_weighted_adm_rainfall_df(rain_uga_rast_weighted, adm_pop_uga_2022, sf_uga)
+```
+
+# Save datasets
+
+```{r}
+rain_uga_rast_weighted %>% terra::writeRaster(file.path(proc_data_dir, "rainfall_weighted_UGA_rast.tif"))
+```
+
+```{r}
+rain_uga_df %>% write_csv(file.path(proc_data_dir, "rainfall_weighted_UGA_adm.csv"))
+```
+
