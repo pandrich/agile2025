@@ -39,7 +39,6 @@ country_map <- c(
 )
 ```
 
-
 # Functions
 
 ```{r}
@@ -62,8 +61,30 @@ neighbors_at_hop <- function(nb_list, start_idx, h) {
   }
   setdiff(frontier, start_idx)
 }
-```
 
+impute_price_with_nbs <- function(g, y) {
+  ct_val <- g[["country"]][1]
+  nb <- nb_by_country[[ct_val]]
+  vals <- g[["food_price_kg"]]
+  nas <- which(is.na(vals))
+  if (length(nas) > 0) {
+      for (i in nas) {
+        for (h in 1:max_hops) {
+          candidates <- neighbors_at_hop(nb, i, h)
+          if (length(candidates) == 0L) next
+          cand_vals <- vals[candidates]
+          cand_vals <- cand_vals[!is.na(cand_vals)]
+          if (length(cand_vals) > 0L) {
+            vals[i] <- mean(cand_vals)
+            break
+          }
+        }
+      }
+    g[["food_price_kg"]] <- vals
+  }
+  g %>% select(-c(country, date))
+}
+```
 
 # Load Data
 
@@ -172,6 +193,9 @@ sf_uga <- (
     district = case_match(
       district,
       "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
       .default = str_to_title(district)
     )
   )
@@ -217,15 +241,6 @@ sf_all <- (
   %>% st_make_valid()
 )
 ```
-
-
-
-```{r}
-nb_moz <- spdep::poly2nb(sf_moz)
-```
-
-
-
 
 ## Crop cycles
 
@@ -343,8 +358,9 @@ sf_food_prices <- (
 )
 ```
 
+# Process Data
 
-# Combine data
+## Combine datasets
 
 ```{r}
 df_food_prices_adm <- (
@@ -362,9 +378,9 @@ df_food_prices_adm <- (
   )
   %>% as_tibble()
   %>% group_by(
-    country, 
-    adm_code, 
-    adm_name, 
+    country,
+    adm_code,
+    adm_name,
     date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
   )
   %>% summarise(
@@ -374,6 +390,7 @@ df_food_prices_adm <- (
 )
 ```
 
+## Create list of all dates for each country
 
 ```{r}
 sf_all_dates <- (
@@ -387,6 +404,8 @@ sf_all_dates <- (
   %>% st_as_sf()
 )
 ```
+
+## Add missing dates to dataset
 
 ```{r}
 sf_food_prices_adm_all_dates <- (
@@ -405,28 +424,7 @@ sf_food_prices_adm_all_dates <- (
 )
 ```
 
-```{r}
-neighbors_at_hop <- function(nb_list, start_idx, h) {
-  if (h <= 0) return (integer(0))
-  if (h == 1) return (nb_list[[start_idx]])
-  visited <- integer(0)
-  frontier <- unique(nb_list[[start_idx]])
-  if (length(frontier) == 0) return(integer(0))
-  step <- 1
-  # We reconstruct the frontier for starting index `start_idx` after step h
-  while (step < h) {
-    step <- step + 1
-    next_nodes <- if (length(frontier) > 0) unique(unlist(nb_list[frontier], use.names = FALSE)) else integer(0)
-    # remove already seen and current frontier to advance
-    next_frontier <- setdiff(next_nodes, c(visited, frontier))
-    if (length(next_frontier) == 0) return(integer(0))
-    visited <- c(visited, frontier)
-    frontier <- next_frontier
-  }
-  setdiff(frontier, start_idx)
-}
-```
-
+## Fill in missing values
 
 ```{r}
 max_hops <- 3
@@ -439,36 +437,14 @@ nb_by_country <- setNames(vector("list", length(countries)), countries)
 for (ct in countries) {
   sf_df_country <- sf_food_prices_adm_all_dates %>% filter(country == ct)
   dates_ct <- sf_df_country$date %>% unique()
-  first_block <- sf_df_country %>% filter(date == dates_ct[[1]])
-  nb_by_country[[ct]] <- poly2nb(first_block, queen = TRUE)
+  geom <- sf_df_country %>% filter(date == dates_ct[[1]])
+  nb_by_country[[ct]] <- poly2nb(geom, queen = TRUE)
 }
 
 sf_food_prices_adm_interp <- (
   sf_food_prices_adm_all_dates
   %>% group_by(country, date)
-  %>% group_modify(~ {
-    g <- .x
-    ct_val <- g[["country"]][1]
-    nb <- nb_by_country[[ct_val]]
-    vals <- g[["food_price_kg"]]
-    nas <- which(is.na(vals))
-    if (length(nas) > 0) {
-        for (i in nas) {
-          for (h in 1:max_hops) {
-            candidates <- neighbors_at_hop(nb, i, h)
-            if (length(candidates) == 0L) next
-            cand_vals <- vals[candidates]
-            cand_vals <- cand_vals[!is.na(cand_vals)]
-            if (length(cand_vals) > 0L) {
-              vals[i] <- mean(cand_vals)
-              break
-            }
-          }
-        }
-      g[["food_price_kg"]] <- vals
-    }
-    g %>% select(-c(country, date))
-  }, .keep = TRUE)
+  %>% group_modify(impute_price_with_nbs, .keep = TRUE)
   %>% ungroup()
 )
 
@@ -479,36 +455,136 @@ sf_food_prices_adm_interp <- (
 )
 ```
 
+## Calculate anomalies
+
 ```{r}
 df_food_prices_adm_12m <- (
   sf_food_prices_adm_interp
   %>% as_tibble()
+  %>% group_by(country, date)
+  %>% mutate(
+    mean_country_price = mean(food_price_kg, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% group_by(country, adm_code, adm_name)
+  %>% mutate(
+    hist_mean_price = mean(food_price_kg, na.rm = TRUE),
+    hist_sd_price = sd(food_price_kg, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    price_above_1sd = as.numeric(food_price_kg > hist_mean_price + hist_sd_price),
+    price_anomaly = as.numeric(food_price_kg / mean_country_price >= 1.2)
+  )
   %>% arrange(country, adm_code, adm_name, date)
   %>% group_by(country, adm_code, adm_name)
   %>% mutate(
-    mean_price = mean(food_price_kg, na.rm = TRUE),
-    sd_price = sd(food_price_kg, na.rm = TRUE),
-    max_food_price_kg_12m = slider::slide_index_dbl(
+    max_food_price_kg_12m = slider::slide_index_dbl( # this allows us to do 12 months rolling max even if we don't have data for each month
       .x = food_price_kg,
       .i = date,
       .f = ~ if (sum(!is.na(.x)) == 0) NA else max(.x, na.rm = TRUE),
       .before = ~ .x %m-% months(12),
-      .complete = FALSE
+      .complete = TRUE
+    ),
+    food_price_above_1s_12m = slider::slide_index_dbl(
+      .x = price_above_1sd,
+      .i = date,
+      .f = ~ sum(.x, na.rm = TRUE),
+      .before = ~ .x %m-% months(12),
+      .complete = TRUE
+    ),
+    food_price_anomaly_12m = slider::slide_index_dbl(
+      .x = price_anomaly,
+      .i = date,
+      .f = ~ sum(.x, na.rm = TRUE),
+      .before = ~ .x %m-% months(12),
+      .complete = TRUE
     )
   )
   %>% ungroup()
   %>% mutate(
-    food_price_dev_12m = (max_food_price_kg_12m - mean_price) / sd_price,
-    food_stress_12m = as.integer(food_price_dev_12m > 1)
+    food_stress_12m = as.integer(max_food_price_kg_12m > hist_mean_price + hist_sd_price)
   )
-  %>% as.data.frame()
-  %>% select(-geometry)
+  %>% select(-c(hist_mean_price, hist_sd_price, geometry))
+)
+
+
+# df_food_prices_adm_12m <- (
+#   sf_food_prices_adm_interp
+#   %>% as_tibble()
+#   %>% group_by(country, date)
+#   %>% mutate(
+#     mean_country_price = mean(food_price_kg, na.rm = TRUE)
+#   )
+#   %>% ungroup()
+#   # %>% group_by(country, adm_name, adm_code)
+#   # %>% mutate(
+#   #   sd_adm_price = sd(food_price_kg, na.rm = TRUE)
+#   # )
+#   %>% ungroup()
+#   %>% mutate(
+#     price_anomaly = as.numeric(food_price_kg / mean_country_price >= 1.2)
+#   )
+#   %>% arrange(country, adm_code, adm_name, date)
+#   %>% group_by(country, adm_code, adm_name)
+#   %>% mutate(
+#     food_price_anomaly_12m = slider::slide_index_dbl(
+#       .x = price_anomaly,
+#       .i = date,
+#       .f = ~ sum(.x, na.rm = TRUE),
+#       .before = ~ .x %m-% months(12),
+#       .complete = TRUE
+#     )
+#   )
+#   %>% ungroup()
+#   %>% select(-c(geometry))
+# )
+```
+
+# Visualizations
+
+```{r}
+(
+  df_food_prices_adm_12m
+  %>% filter(
+    country == "Namibia"
+  )
+  %>% ggplot(
+    aes(x = date, y = food_price_kg, color = adm_name)
+  )
+  + geom_line()
+)
+```
+
+```{r}
+(
+  df_food_prices_adm_12m
+  %>% filter(
+    country == "Namibia"
+  )
+  %>% ggplot(
+    aes(x = date, y = food_price_anomaly_12m, color = adm_name)
+  )
+  + geom_line()
+)
+```
+
+```{r}
+(
+  df_food_prices_adm_12m
+  %>% filter(
+    country == "Namibia"
+  )
+  %>% ggplot(
+    aes(x = date, y = food_price_above_1s_12m, color = adm_name)
+  )
+  + geom_line()
 )
 ```
 
 # Save
 
 ```{r}
+df_food_prices_adm %>% write_csv(file.path(proc_data_dir, "food_prices_adm.csv"))
 df_food_prices_adm_12m %>% write_csv(file.path(proc_data_dir, "food_prices_adm_12m.csv"))
 ```
-

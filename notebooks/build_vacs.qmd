@@ -113,11 +113,20 @@ vacs_moz <- (
       currsch %in% c(2, NA) ~ 0,
       .default = NA
     ),
-  #   completed_school = case_when(
-  #     schrsn == 5 ~ 1,
-  #     schrsn %in% c(98, 99) ~ NA,
-  #     .default = 0
-  #   ),
+    school_level = case_when(
+      is.na(schhl) ~ 1,
+      schhl == 1 ~ 2,
+      schhl %in% c(2, 3) ~ 3,
+      schhl %in% seq(4, 8) ~ 4,
+      schhl %in% c(9, 10) ~ 5,
+      schhl %in% c(98, 99) ~ NA,
+      .default = NA
+    ),
+    completed_school = case_when(
+      schrsn == 5 ~ 1,
+      schrsn %in% c(98, 99) ~ NA,
+      .default = 0
+    ),
     work = case_when(
       work == 1 ~ 1,
       work == 2 ~ 0,
@@ -204,6 +213,7 @@ vacs_moz <- (
       (sv_1 == 1 & (sv1who %in% c(1:4, 21:24) | sv1ftr %in% c(1:4, 21:24))) ~ 1,
       .default = 0
     ),
+    svaffsx = replace_na(svaffsx, 2),
     sv_2 = case_when(
       (svaffsx == 2 & svafsany == 2) ~ 0,
       (svaffsx == 1 | svafsany == 1) & (sv212m == 2 | sv2ft12 == 2) ~ 0,
@@ -224,6 +234,7 @@ vacs_moz <- (
       (sv_2 == 1 & (sv2who %in% c(1:4, 21:24) | sv2ftr %in% c(1:4, 21:24))) ~ 1,
       .default = 0
     ),
+    svpfssx = replace_na(svpfssx, 2),
     sv_3 = case_when(
       (svpfssx == 2 & svpfsany == 2) ~ 0,
       (svpfssx == 1 | svpfsany == 1) & (sv312m == 2 | sv3ft12 == 2) ~ 0,
@@ -244,6 +255,7 @@ vacs_moz <- (
       (sv_3 == 1 & (sv3who %in% c(1:4, 21:24) | sv3ftr %in% c(1:4, 21:24))) ~ 1,
       .default = 0
     ),
+    svprssx = replace_na(svprssx, 2),
     sv_4 = case_when(
       (svprssx == 2 & svprsany == 2) ~ 0,
       (svprssx == 1 | svprsany == 1) & (sv412m == 2 | sv4ft12 == 2) ~ 0,
@@ -264,6 +276,7 @@ vacs_moz <- (
       (sv_4 == 1 & (sv4who %in% c(1:4, 21:24) | sv4ftr %in% c(1:4, 21:24))) ~ 1,
       .default = 0
     ),
+    svaffsx = replace_na(svaffsx, 2),
     sv_5 = case_when(
       (svaffsx == 2 & svafsxany == 2) ~ 0,
       (svaffsx == 1 | svafsxany == 1) & (sv512m == 2 | sv5ft12 == 2) ~ 0,
@@ -361,6 +374,7 @@ vacs_moz <- (
     hh_food_ins,
     # attended_school,
     in_school,
+    school_level,
     # completed_school,
     # hh_food_ins,
     work,
@@ -389,6 +403,40 @@ vacs_moz <- (
     # food_ins,
   )
 )
+```
+
+```{r}
+# (
+#   vacs_moz
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     svtch,
+#     sv112m,
+#     sv1ft12,
+#     sv_2,
+#     svaffsx,
+#     svafsany,
+#     sv212m,
+#     sv2ft12,
+#     sv_3,
+#     svpfssx,
+#     svpfsany,
+#     sv312m,
+#     sv3ft12,
+#     sv_4,
+#     svprssx,
+#     svprsany,
+#     sv412m,
+#     sv4ft12,
+#     sv_5,
+#     svaffsx,
+#     svafsxany,
+#     sv512m,
+#     sv5ft12
+#   )
+# )
 ```
 
 ## Zimbabwe
@@ -436,6 +484,11 @@ vacs_zwe <- (
       q4 == 1 ~ 1,
       q4 %in% c(2, NA) ~ 0,
       .default = NA
+    ),
+    school_level = case_when(
+      is.na(q5) ~ 1,
+      q5 %in% c(98, 99) ~ NA,
+      .default = q5 + 1
     ),
     work = case_when(
       q13 == 1 ~ 1,
@@ -645,6 +698,7 @@ vacs_zwe <- (
     age = q2,
     hh_food_ins,
     in_school,
+    school_level,
     work,
     live_with_mother,
     live_with_father,
@@ -658,6 +712,32 @@ vacs_zwe <- (
     sv_ip
   )
 )
+```
+
+```{r}
+# (
+#   vacs_zwe
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     q600,
+#     q602,
+#     q612,
+#     sv_2,
+#     q700,
+#     q702,
+#     q712,
+#     sv_3,
+#     q800,
+#     q802,
+#     q815,
+#     sv_4,
+#     q900,
+#     q902,
+#     q914
+#   )
+# )
 ```
 
 ## Lesotho
@@ -729,6 +809,14 @@ vacs_lso <- (
       q4 == 1 ~ 1,
       q4 %in% c(2, NA) ~ 0,
       .default = NA
+    ),
+    school_level = case_when(
+      is.na(q6) ~ 1,
+      q6 == 1 ~ 2,
+      q6 == 2 ~ 3,
+      q6 %in% c(3,4) ~ 4,
+      q6 %in% c(98, 99) ~ NA,
+      .default = q6
     ),
     work = case_when(
       q11 == 1 ~ 1,
@@ -811,6 +899,7 @@ vacs_lso <- (
       (sv_1 == 1 & (q605 %in% c(1:4, 17:20) | q612 %in% c(1:4, 17:20))) ~ 1,
       .default = 0
     ),
+    q700a = replace_na(q700a, 2),
     sv_2 = case_when(
       (q700a == 2 & q700b == 2) ~ 0,
       (q700a == 1 | q700b == 1) & (q702 == 2 | q709 == 2) ~ 0,
@@ -831,6 +920,7 @@ vacs_lso <- (
       (sv_2 == 1 & (q705 %in% c(1:4, 17:20) | q712 %in% c(1:4, 17:20))) ~ 1,
       .default = 0
     ),
+    q800a = replace_na(q800a, 2),
     sv_3 = case_when(
       (q800a == 2 & q800b == 2) ~ 0,
       (q800a == 1 | q800b == 1) & (q802 == 2 | q810 == 2) ~ 0,
@@ -851,6 +941,7 @@ vacs_lso <- (
       (sv_3 == 1 & (q805 %in% c(1:4, 17:20) | q813 %in% c(1:4, 17:20))) ~ 1,
       .default = 0
     ),
+    q900a = replace_na(q900a, 2),
     sv_4 = case_when(
       (q900a == 2 & q900b == 2) ~ 0,
       (q900a == 1 | q900b == 1) & (q902 == 2 | q909 == 2) ~ 0,
@@ -871,6 +962,7 @@ vacs_lso <- (
       (sv_4 == 1 & (q905 %in% c(1:4, 17:20) | q912 %in% c(1:4, 17:20))) ~ 1,
       .default = 0
     ),
+    q1000a = replace_na(q1000a, 2),
     sv_5 = case_when(
       (q1000a == 2 & q1000b == 2) ~ 0,
       (q1000a == 1 | q1000b == 1) & (q1002 == 2 | q1009 == 2) ~ 0,
@@ -953,10 +1045,6 @@ vacs_lso <- (
     #   .default = NA
     # ),
   )
-  # %>% filter(
-  #   sex == 2,
-  #   q2 <= 17
-  # )
   %>% select(
     country,
     adm1_code,
@@ -971,6 +1059,7 @@ vacs_lso <- (
     age = q2,
     hh_food_ins,
     in_school,
+    school_level,
     work,
     live_with_mother,
     live_with_father,
@@ -984,6 +1073,40 @@ vacs_lso <- (
     sv_ip
   )
 )
+```
+
+```{r}
+# (
+#   vacs_lso
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     q600,
+#     q602,
+#     q609,
+#     sv_2,
+#     q700a,
+#     q700b,
+#     q702,
+#     q709,
+#     sv_3,
+#     q800a,
+#     q800b,
+#     q802,
+#     q810,
+#     sv_4,
+#     q900a,
+#     q900b,
+#     q902,
+#     q909,
+#     sv_5,
+#     q1000a,
+#     q1000b,
+#     q1002,
+#     q1009
+#   )
+# )
 ```
 
 ## Namibia
@@ -1058,6 +1181,14 @@ vacs_nam <- (
       q4 == 1 ~ 1,
       q4 %in% c(2, NA) ~ 0,
       .default = NA
+    ),
+    school_level = case_when(
+      is.na(q6) ~ 1,
+      q6 == 1 ~ 2,
+      q6 == 2 ~ 3,
+      q6 %in% c(3, 4) ~ 4,
+      q6 %in% c(98, 99) ~ NA,
+      .default = q6
     ),
     work = case_when(
       q11 == 1 ~ 1,
@@ -1145,6 +1276,7 @@ vacs_nam <- (
       (sv_1 == 1 & (q605 %in% c(1:4, 19:21) | q612 %in% c(1:4, 19:21))) ~ 1,
       .default = 0
     ),
+    q700a = replace_na(q700a, 2),
     sv_2 = case_when(
       (q700a == 2 & q700b == 2) ~ 0,
       (q700a == 1 | q700b == 1) & (q702 == 2 | q709 == 2) ~ 0,
@@ -1165,6 +1297,7 @@ vacs_nam <- (
       (sv_2 == 1 & (q705 %in% c(1:4, 19:21) | q712 %in% c(1:4, 19:21))) ~ 1,
       .default = 0
     ),
+    q800a = replace_na(q800a, 2),
     sv_3 = case_when(
       (q800a == 2 & q800b == 2) ~ 0,
       (q800a == 1 | q800b == 1) & (q802 == 2 | q810 == 2) ~ 0,
@@ -1185,6 +1318,7 @@ vacs_nam <- (
       (sv_3 == 1 & (q805 %in% c(1:4, 19:21) | q813 %in% c(1:4, 19:21))) ~ 1,
       .default = 0
     ),
+    q900a = replace_na(q900a, 2),
     sv_4 = case_when(
       (q900a == 2 & q900b == 2) ~ 0,
       (q900a == 1 | q900b == 1) & (q902 == 2 | q909 == 2) ~ 0,
@@ -1205,6 +1339,7 @@ vacs_nam <- (
       (sv_4 == 1 & (q905 %in% c(1:4, 19:21) | q912 %in% c(1:4, 19:21))) ~ 1,
       .default = 0
     ),
+    q1000a = replace_na(q1000a, 2),
     sv_5 = case_when(
       (q1000a == 2 & q1000b == 2) ~ 0,
       (q1000a == 1 | q1000b == 1) & (q1002 == 2 | q1009 == 2) ~ 0,
@@ -1305,6 +1440,7 @@ vacs_nam <- (
     age = q2,
     hh_food_ins,
     in_school,
+    school_level,
     work,
     live_with_mother,
     live_with_father,
@@ -1320,31 +1456,41 @@ vacs_nam <- (
 )
 ```
 
-## Zambia
-
 ```{r}
-ur_ken <- (
-  readxl::read_xlsx(
-    file.path(
-      raw_data_dir,
-      "VACS_raw",
-      "For Bothaina_091323.xlsx"
-    ),
-    sheet = "Kenya"
-  )
-  %>% select(
-    cluster = `CLUSTER NO`,
-    rural = `RESIDENCE\r\n1=Rural\r\n2=Urban`
-  )
-  %>% mutate(
-    rural = if_else(
-      rural == 1,
-      1,
-      0
-    )
-  )
-)
+# (
+#   vacs_nam
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     q600,
+#     q602,
+#     q609,
+#     sv_2,
+#     q700a,
+#     q700b,
+#     q702,
+#     q709,
+#     sv_3,
+#     q800a,
+#     q800b,
+#     q802,
+#     q810,
+#     sv_4,
+#     q900a,
+#     q900b,
+#     q902,
+#     q909,
+#     sv_5,
+#     q1000a,
+#     q1000b,
+#     q1002,
+#     q1009
+#   )
+# )
 ```
+
+## Zambia
 
 I believe that `region` indicates if the region is rural or urban. I'm guessing 1 = urban and 2 = rural Why are there 30 sex variables???
 
@@ -1429,6 +1575,11 @@ vacs_zmb <- (
       q4 == 1 ~ 1,
       q4 %in% c(2, NA) ~ 0,
       .default = NA
+    ),
+    school_level = case_when(
+      is.na(q5) ~ 1,
+      q5 %in% c(98, 99) ~ NA,
+      .default = q5 + 1
     ),
     work = case_when(
       q11 == 1 ~ 1,
@@ -1622,10 +1773,6 @@ vacs_zmb <- (
     #   .default = NA
     # ),
   )
-  # %>% filter(
-  #   female == 2,
-  #   q2 <= 17
-  # )
   %>% select(
     country,
     adm1_code = prov,
@@ -1640,6 +1787,7 @@ vacs_zmb <- (
     age = q2,
     hh_food_ins,
     in_school,
+    school_level,
     work,
     live_with_mother,
     live_with_father,
@@ -1653,6 +1801,32 @@ vacs_zmb <- (
     sv_ip
   )
 )
+```
+
+```{r}
+# (
+#   vacs_zmb
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     q700,
+#     q702,
+#     q712,
+#     sv_2,
+#     q800,
+#     q802,
+#     q812,
+#     sv_3,
+#     q900,
+#     q902,
+#     q915,
+#     sv_4,
+#     q1000,
+#     q1002,
+#     q1014
+#   )
+# )
 ```
 
 ## Kenya
@@ -1687,7 +1861,7 @@ ur_ken <- (
   readxl::read_xlsx(
     file.path(
       raw_data_dir,
-      "VACS_raw",
+      "VACS",
       "VACS_Kenya 2018",
       "Kenya clusters_2019.xlsx"
     ),
@@ -1717,6 +1891,7 @@ vacs_ken <- (
   )
   %>% rename_with(tolower)
   %>% mutate(
+    q6 = as.numeric(q6),
     date = as.Date(str_split_i(hdate_f, "T", 1), format = "%Y-%m-%d"),
     country = "Kenya",
     female = if_else(sex == "2", 1, 0),
@@ -1767,6 +1942,11 @@ vacs_ken <- (
       q4 == 1 ~ 1,
       q4 %in% c(2, NA) ~ 0,
       .default = NA
+    ),
+    school_level = case_when(
+      is.na(q6) ~ 1,
+      q6 %in% c(98, 99) ~ NA,
+      .default = q6 + 1
     ),
     work = case_when(
       q11 == 1 ~ 1,
@@ -1849,6 +2029,11 @@ vacs_ken <- (
       (sv_1 == 1 & (q605 %in% c(1:4, 17:19) | q612 %in% c(1:4, 17:19))) ~ 1,
       .default = 0
     ),
+    q700a = if_else(
+      is.na(q700a),
+      2,
+      q700a
+    ),
     sv_2 = case_when(
       (q700a == 2 & q700b == 2) ~ 0,
       (q700a == 1 | q700b == 1) & (q702 == 2 | q709 == 2) ~ 0,
@@ -1868,6 +2053,11 @@ vacs_ken <- (
       (sv_2 == 1 & (is.na(q705) & is.na(q712))) ~ NA,
       (sv_2 == 1 & (q705 %in% c(1:4, 17:19) | q712 %in% c(1:4, 17:19))) ~ 1,
       .default = 0
+    ),
+    q800a = if_else(
+      is.na(q800a),
+      2,
+      q800a
     ),
     sv_3 = case_when(
       (q800a == 2 & q800b == 2) ~ 0,
@@ -1889,6 +2079,11 @@ vacs_ken <- (
       (sv_3 == 1 & (q805 %in% c(1:4, 17:19) | q813 %in% c(1:4, 17:19))) ~ 1,
       .default = 0
     ),
+    q900a = if_else(
+      is.na(q900a),
+      2,
+      q900a
+    ),
     sv_4 = case_when(
       (q900a == 2 & q900b == 2) ~ 0,
       (q900a == 1 | q900b == 1) & (q902 == 2 | q909 == 2) ~ 0,
@@ -1908,6 +2103,11 @@ vacs_ken <- (
       (sv_4 == 1 & (is.na(q905) & is.na(q912))) ~ NA,
       (sv_4 == 1 & (q905 %in% c(1:4, 17:19) | q912 %in% c(1:4, 17:19))) ~ 1,
       .default = 0
+    ),
+    q1000a = if_else(
+      is.na(q1000a),
+      2,
+      q1000a
     ),
     sv_5 = case_when(
       (q1000a == 2 & q1000b == 2) ~ 0,
@@ -1952,10 +2152,6 @@ vacs_ken <- (
       .default = 0
     ),
   )
-  # %>% filter(
-  #   female == 2,
-  #   q2 <= 17
-  # )
   %>% merge(
     ur_ken,
     by = "clust",
@@ -1980,6 +2176,7 @@ vacs_ken <- (
     age = q2,
     hh_food_ins,
     in_school,
+    school_level,
     work,
     live_with_mother,
     live_with_father,
@@ -1995,10 +2192,59 @@ vacs_ken <- (
 )
 ```
 
+```{r}
+# (
+#   vacs_ken
+#   %>% filter(is.na(sv))
+#   %>% select(
+#     sv,
+#     sv_1,
+#     q600,
+#     q602,
+#     q609,
+#     sv_2,
+#     q700a,
+#     q700b,
+#     q702,
+#     q709,
+#     sv_3,
+#     q800a,
+#     q800b,
+#     q802,
+#     q810,
+#     sv_4,
+#     q900a,
+#     q900b,
+#     q902,
+#     q909,
+#     sv_5,
+#     q1000a,
+#     q1000b,
+#     q1002
+#   )
+# )
+```
+
 # Combine
 
 ```{r}
-df_vacs <- bind_rows(vacs_moz, vacs_zwe, vacs_lso, vacs_nam, vacs_zmb, vacs_ken)
+df_vacs <- (
+  bind_rows(vacs_moz, vacs_zwe, vacs_lso, vacs_nam, vacs_zmb, vacs_ken)
+  %>% mutate(
+    tot_weights = sum(sample_weight, na.rm = TRUE)
+  )
+  %>% group_by(country)
+  %>% mutate(
+    country_weights = sum(sample_weight, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sample_weight = sample_weight * (tot_weights / length(unique(country))) * (1 / country_weights)
+  )
+  %>% select(
+    -c(tot_weights, country_weights)
+  )
+)
 ```
 
 ```{r}
@@ -2010,6 +2256,25 @@ df_vacs %>% write_csv(file.path(proc_data_dir, paste0("vacs_clean_", date, ".csv
   df_vacs
   %>% filter(
     is.na(date)
+  )
+)
+```
+
+```{r}
+(
+  df_vacs
+  %>% filter(
+    is.na(sv)
+  )
+)
+```
+
+```{r}
+(
+  df_vacs
+  %>% group_by(country)
+  %>% summarise(
+    perc_miss_sv = 100 * mean(is.na(sv))
   )
 )
 ```

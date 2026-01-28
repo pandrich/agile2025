@@ -1,0 +1,1860 @@
+---
+title: "Model food insecurity and drought impact on all sexual violence - adults"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(spdep)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(ggdist)
+library(bayesplot)
+library(tidybayes)
+# theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
+library(patchwork)
+library(tidytext)
+library(reliabilitydiag)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+temp_dir <- root("temp")
+dir.create(temp_dir, showWarnings = FALSE)
+raw_data_dir <- root("data/raw")
+model_data_dir <- root("data/processed/model_data")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+src_dir <- root("src")
+```
+
+# Notebook settings
+
+```{r}
+# Settings
+nb_name <-  "Model food insecurity and drought impact on all sexual violence - adults"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
+label_map <- c(
+  tolerate_women_violence = "Tolerate violence",
+  live_with_partner = "Live with partner",
+  live_with_father = "Live with father",
+  in_school = "In school",
+  school_level = "Schooling level",
+  work = "Has worked",
+  rural = "Rural area",
+  age = "Age",
+  rel_age_ord = "Excess Age (years)",
+  log_pop_density = "Population density",
+  clim = "# Drought Conditions",
+  clim_stress = "Climate Stress",
+  food_stress_12m = "Food Price Stress",
+  food_stress = "Food Price Stress",
+  food_price_above_1s_12m = "# Price Anomalies",
+  food_price_anomaly_12m = "# Price Anomalies"
+)
+
+# Var settings
+food_ins_var <- "food_price_anomaly_12m"
+clim_var <- "value_pop_weighted_spei_below_m1_12m"
+clim_label <- "spei"
+viol_var <- "sv"
+viol_label <- "all_viol"
+pop_label <- "adults"
+covars <- c(
+  "sample_weight",
+  "country",
+  "adm_name",
+  "lon",
+  "lat",
+  "rural",
+  "age",
+  "school_level",
+  "live_with_partner",
+  "tolerate_women_violence",
+  food_ins_var,
+  viol_var
+)
+vars <- c(covars, clim_var)
+
+bin_covs <- c(
+  "rural",
+  "live_with_partner", 
+  "tolerate_women_violence"
+)
+
+mono_covs <- c(
+  "rel_age_ord",
+  "school_level",
+  "food_price_anomaly",
+  "clim"
+)
+cont_covs <- c(
+  # "clim"
+)
+
+# Computation settings
+adapt_delta = 0.95
+```
+
+# Functions
+
+```{r}
+source(file.path(src_dir, "viz.R"))
+source(file.path(src_dir, "model_check_utils.R"))
+```
+
+# Import Data
+
+## Geometries
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+  %>% st_make_valid()
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+    sf_ken
+  )
+  %>% st_transform(3857)
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = st_coordinates(centroid)[,1],
+    lat = st_coordinates(centroid)[,2]
+  )
+)
+```
+
+## Climate & Food Prices
+
+```{r}
+df_clim_fp <- (
+  read_csv(
+    file.path(
+      model_data_dir,
+      "climate_food_prices.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% merge(
+    sf_all %>% as.data.frame() %>% select(country, adm_name),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% select(
+    country,
+    adm_name,
+    date,
+    clim = !!sym(clim_var),
+    food_price_anomaly,
+    food_price_anomaly_12m
+  )
+)
+```
+
+```{r}
+#| fig-width: 11
+#| fig-height: 2.5
+(
+  df_clim_fp
+  %>% filter(country != "Uganda")
+  %>% group_by(country, clim)
+  %>% summarise(
+    num_entries = n(),
+    mean_food_price_anomaly = mean(food_price_anomaly, na.rm = TRUE),
+    sd_food_price_anomaly = sd(food_price_anomaly, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% filter(
+    num_entries >= 40
+  )
+  %>% ggplot(
+    aes(
+      x = clim,
+      y = mean_food_price_anomaly,
+      color = country
+    )
+  )
+  + geom_point()
+  + geom_smooth(
+    formula = y ~ x,
+    method = "lm"
+  )
+  + facet_wrap(
+    ~ country,
+    nrow = 1
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none"
+  )
+  + labs(
+    x = "Months of drought conditions (past year)",
+    y = "Food price anomaly\n(mean)"
+  )
+)
+```
+
+```{r}
+#| fig-width: 11
+#| fig-height: 2.5
+(
+  df_clim_fp
+  %>% filter(country != "Uganda")
+  %>% group_by(country, clim)
+  %>% summarise(
+    num_entries = n(),
+    mean_food_price_anomaly_12m = mean(food_price_anomaly_12m, na.rm = TRUE),
+    sd_food_price_anomaly_12m = sd(food_price_anomaly_12m, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% filter(
+    num_entries >= 40
+  )
+  %>% ggplot(
+    aes(
+      x = clim,
+      y = mean_food_price_anomaly_12m,
+      color = country
+    )
+  )
+  + geom_point()
+  + geom_smooth(
+    formula = y ~ x,
+    method = "lm"
+  )
+  + facet_wrap(
+    ~ country,
+    nrow = 1
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none"
+  )
+  + labs(
+    x = "Months of drought conditions (past year)",
+    y = "Food price anomaly\n(past year, mean)"
+  )
+)
+```
+
+
+## Climate, Food Prices & Violence
+
+```{r}
+df_clim_viol <- (
+  read_csv(
+    file.path(
+      model_data_dir,
+      "climate_food_prices_violence.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% filter(
+    !is.na(sample_weight),
+    country != "Kenya"
+  )
+  %>% group_by(country)
+  %>% mutate(
+    country_sample_weight = sum(sample_weight, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    country = as.factor(country),
+    sample_weight = (
+      1E-3 
+      * sample_weight 
+      * (
+        sum(sample_weight, na.rm = TRUE) 
+        / (length(unique(country)) * country_sample_weight)
+      )
+    ),
+    live_with_parent = as.numeric((live_with_father == 1) | (live_with_mother == 1))
+  )
+  %>% select(-c(live_with_father, live_with_mother))
+  %>% merge(
+    sf_all %>% as.data.frame() %>% select(country, adm_name, lon, lat),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+colMeans(is.na(df_clim_viol))
+```
+
+```{r}
+(
+  df_clim_viol
+  %>% group_by(country)
+  %>% summarise(
+    miss_sv = mean(is.na(sv)),
+    miss_sv_np = mean(is.na(sv_np)),
+    miss_sv_ip = mean(is.na(sv_ip)),
+  )
+)
+```
+
+# Prepare Data
+
+## Restrict locations
+
+```{r}
+sf_vacs <- (
+  sf_all
+  %>% filter(
+    country %in% (df_clim_viol$country %>% unique()),
+    adm_name %in% (df_clim_viol$adm_name %>% unique())
+  )
+)
+```
+
+## Extract model subsets
+
+```{r}
+df_model <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+    age >= 19
+  )
+  %>% select(all_of(vars))
+  %>% na.omit()
+  %>% mutate(
+    adm_name = factor(adm_name),
+    rel_age = as.integer(age - min(age)),
+    rel_age_ord = factor(
+      rel_age,
+      levels = sort(unique(rel_age)),
+      ordered = TRUE
+    ),
+    school_level = factor(
+      school_level, 
+      levels = sort(unique(school_level)),
+      ordered = TRUE
+    ),
+    food_stress = as.integer(!!sym(food_ins_var) >= 6), 
+    food_price_anomaly = factor(
+      !!sym(food_ins_var),
+      levels = 0:12,
+      ordered = TRUE
+    ),
+    clim := factor(
+      !!sym(clim_var), 
+      levels = 0:12, 
+      ordered = TRUE
+    )
+  )
+)
+```
+
+## Generate adjacency matrix
+
+```{r}
+nb_list <- poly2nb(sf_vacs)
+W <- nb2mat(nb_list, style = "B", zero.policy = TRUE)
+rownames(W) <- sf_vacs$adm_name
+colnames(W) <- sf_vacs$adm_name
+levs <- levels(df_model$adm_name)
+W_ord <- W[levs, levs]
+```
+
+```{r}
+edges <- (
+  geostan::edges(W, unique_pairs_only = TRUE, shape = sf_vacs$geometry)
+)
+graph <- st_geometry(edges)
+```
+
+```{r}
+plot(sf_vacs$geometry, lwd = .15)
+plot(graph, add = TRUE, type = "p", col = "red")
+plot(graph, add = TRUE, type = "l", col = "black")
+```
+
+# Simulation
+
+## Generate data
+
+```{r}
+simu <- rstan::stan(
+  file.path(mod_dir, "simulate_clim_food.stan"),
+  iter = 1,
+  warmup = 0,
+  chains = 1,
+  seed = seed,
+  algorithm = "Fixed_param"
+)
+```
+
+```{r}
+X <- rstan::extract(simu)$X[1, ,]
+y <- rstan::extract(simu)$y[1,]
+sim_data <- tibble(
+  clim = X[, 1],
+  food = X[, 2],
+  age = X[, 3],
+  sv = y
+)
+```
+
+## Fit model with no food stressor
+
+```{r}
+sim_form_nf <- bf(sv ~ 1 + clim + age)
+sim_fit_nf <- brm(
+  formula = sim_form_nf,
+  family = bernoulli("logit"),
+  data = sim_data,
+  seed = seed,
+  refresh = 1000,
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+sim_fit_nf
+```
+
+```{r}
+df_draws_sim_nf<- (
+  as_draws_df(sim_fit_nf)
+  %>% select(b_clim, b_age)
+  %>% pivot_longer(
+    cols = c(b_clim, b_age),
+    names_to = "covariate",
+    values_to = "value"
+  )
+  %>% mutate(
+    covariate = factor(covariate, levels = c("b_clim", "b_age"))
+  )
+)
+
+df_draws_sim_nf_stats <- (
+  df_draws_sim_nf
+    %>% group_by(covariate)
+    %>% summarise(
+      median_val = median(value),
+      mean_val = mean(value),
+      lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+      upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+      lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+      upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+      .groups = "drop"
+    )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 2
+(
+  ggplot(
+    data = df_draws_sim_nf,
+    mapping = aes(
+      x = value,
+      y = covariate
+    )
+  )
+  + ggridges::geom_density_ridges(
+    aes(height = after_stat(scaled)),
+    stat = "density",
+    orientation = "x",
+    scale = 0.6,
+    rel_min_height = 0.01,
+    alpha = 0.7,
+    color = NA,
+    fill = "#FDD0A2FF"
+  )
+  + geom_segment(
+    data = df_draws_sim_nf_stats,
+    aes(y = covariate, yend = covariate, x = lower2_val, xend = upper2_val),
+    linewidth = 0.6,
+    alpha = 0.5,
+    color = "#A63603FF",
+    inherit.aes = FALSE
+  )
+  + geom_segment(
+    data = df_draws_sim_nf_stats,
+    aes(y = covariate, yend = covariate, x = lower1_val, xend = upper1_val),
+    linewidth = 1.2,
+    alpha = 0.9,
+    color = "#A63603FF",
+    inherit.aes = FALSE
+  )
+  + geom_point(
+    data = df_draws_sim_nf_stats,
+    aes(y = covariate, x = median_val),
+    color = "#A63603FF",
+    size = 2,
+    inherit.aes = FALSE
+  )
+  + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Covariate Value",
+  )
+  + scale_y_discrete(
+    labels = c("b_age" = "Age", "b_clim" = "Climate Shock"),
+    expand = expansion(mult = c(0.1, 0.7))
+  )
+  + scale_x_continuous(
+    limits = c(-1, 3.2)
+  )
+)
+
+ggsave(file.path(fig_dir, "sim_post_covariates_nf.png"))
+```
+
+## Fit model with food stressor
+
+```{r}
+sim_form <- bf(sv ~ 1 + clim + food + age)
+sim_fit <- brm(
+  formula = sim_form,
+  family = bernoulli("logit"),
+  data = sim_data,
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+sim_fit
+```
+
+```{r}
+df_draws_sim<- (
+  as_draws_df(sim_fit)
+  %>% select(b_clim, b_age, b_food)
+  %>% pivot_longer(
+    cols = c(b_clim, b_age, b_food),
+    names_to = "covariate",
+    values_to = "value"
+  )
+  %>% mutate(
+    covariate = factor(covariate, levels = c("b_clim", "b_food", "b_age"))
+  )
+)
+
+df_draws_sim_stats <- (
+  df_draws_sim
+    %>% group_by(covariate)
+    %>% summarise(
+      median_val = median(value),
+      mean_val = mean(value),
+      lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+      upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+      lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+      upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+      .groups = "drop"
+    )
+)
+```
+
+```{r}
+#| fig-width: 4.1
+#| fig-height: 3
+(
+  ggplot(
+    data = df_draws_sim,
+    mapping = aes(
+      x = value,
+      y = covariate
+    )
+  )
+  + ggridges::geom_density_ridges(
+    aes(height = after_stat(scaled)),
+    stat = "density",
+    orientation = "x",
+    scale = 0.6,
+    rel_min_height = 0.01,
+    alpha = 0.7,
+    color = NA,
+    fill = "#FDD0A2FF"
+  )
+  + geom_segment(
+    data = df_draws_sim_stats,
+    aes(y = covariate, yend = covariate, x = lower2_val, xend = upper2_val),
+    linewidth = 0.6,
+    alpha = 0.5,
+    color = "#A63603FF",
+    inherit.aes = FALSE
+  )
+  + geom_segment(
+    data = df_draws_sim_stats,
+    aes(y = covariate, yend = covariate, x = lower1_val, xend = upper1_val),
+    linewidth = 1.2,
+    alpha = 0.9,
+    color = "#A63603FF",
+    inherit.aes = FALSE
+  )
+  + geom_point(
+    data = df_draws_sim_stats,
+    aes(y = covariate, x = median_val),
+    color = "#A63603FF",
+    size = 2,
+    inherit.aes = FALSE
+  )
+  + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_text(size = 15),
+    axis.text.x = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Covariate Value",
+  )
+  + scale_y_discrete(
+    labels = c("b_age" = "Age", "b_clim" = "Climate Shock", "b_food" = "Food Insecurity"),
+    expand = expansion(mult = c(0.1, 0.35))
+  )
+  + scale_x_continuous(
+    limits = c(-1, 3.2)
+  )
+)
+
+ggsave(file.path(fig_dir, "sim_post_covariates.png"))
+```
+
+## Fit model with interactions
+
+```{r}
+# sim_form_int <- bf(sv ~ 1 + age + food + clim + (clim | food))
+# sim_fit_int <- brm(
+#   formula = sim_form_int,
+#   family = bernoulli("logit"),
+#   data = sim_data,
+#   seed = seed,
+#   refresh = 1000
+# )
+```
+
+```{r}
+# sim_fit_int
+```
+
+# Modeling
+
+## No Random effects
+
+### Model Components
+
+```{r}
+stanvars <- stanvar(5, "num_pred")
+
+prior_list <- c(
+  prior(student_t(3, -1, 0.4), class = "Intercept", resp = "foodpriceabove1s12m"),
+  prior(student_t(3, -1, 0.4), class = "Intercept", resp = "sv"),
+  prior(normal(0, (1.5 / sqrt(num_pred))), class = "b", resp = "sv"),
+  # prior(exponential(1/0.3), class = "sd", resp = "foodpriceabove1s12m"),
+  # prior(exponential(1/0.3), class = "sd", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "morel_age_ord1", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "moschool_level1", resp = "sv"),
+  prior(dirichlet(1), class = "simo", coef = "mofood_price_above_1s_12m1", resp = "sv"),
+  prior(dirichlet(1), class = "simo", coef = "moclim1", resp = "foodpriceabove1s12m"),
+  prior(dirichlet(1), class = "simo", coef = "moclim1", resp = "sv")
+  # prior(normal(0, 0.3), class = "car", resp = "foodpriceabove1s12m"),
+  # prior(exponential(1/0.3), class = "sdcar", resp = "foodpriceabove1s12m")
+)
+
+bf_med <- bf(
+  (
+    food_price_above_1s_12m | weights(sample_weight) ~ (
+      1 
+      + mo(clim) 
+      # + (1 + mo(clim) | country)
+      # + car(W, gr = adm_name, type = 'escar')
+    )
+  ),
+  family = cumulative(link = "logit")
+)
+
+bf_out <- bf(
+  # as.formula(
+  #   paste(
+  #     viol_var,
+  #     "| weights(sample_weight)",
+  #     "~",
+  #     "(
+  #       1 
+  #       + live_with_partner
+  #       + tolerate_women_violence
+  #       + rural
+  #       + mo(rel_age_ord)
+  #       + mo(school_level)
+  #       + mo(food_price_above_1s_12m)
+  #       + mo(clim)
+  #       + (1 + mo(food_price_above_1s_12m) + mo(clim)| country)
+  #     )"
+  #   )
+  as.formula(
+    paste(
+      viol_var,
+      "| weights(sample_weight)",
+      "~",
+      "(
+        1 
+        + live_with_partner
+        + tolerate_women_violence
+        + rural
+        + mo(food_price_above_1s_12m)
+        + mo(clim)
+      )"
+    )
+  ),
+  family = bernoulli(link = "logit")
+)
+
+```
+
+### Approximate with Pathfinder
+
+```{r}
+stancode <- make_stancode(bf_med + bf_out + set_rescor(FALSE),
+                          prior = prior_list,
+                          data = df_model,
+                          stanvars = stanvars)
+
+standata <- make_standata(bf_med + bf_out + set_rescor(FALSE),
+                          data = df_model,
+                          data2 = list(W = W_ord),
+                          stanvars = stanvars)
+
+writeLines(stancode, file.path(mod_dir, "full_model_spei_1sd_food_adult_all_viol.stan"))
+mod <- cmdstan_model(file.path(mod_dir, "full_model_spei_1sd_food_adult_all_viol.stan"))
+```
+
+```{r}
+pathfinder <- mod$pathfinder(
+  data = standata, 
+  init = 0.1,
+  seed = seed,
+  refresh = 0,
+  output_dir = mod_dir
+)
+```
+
+```{r}
+pdraws <- pathfinder$draws()
+summarise_draws(subset(pdraws, variable=c('lp__')), n_distinct)
+```
+
+### MCMC
+
+```{r}
+# fit <- mod$sample(
+#   data = standata,
+#   iter_warmup = 100,
+#   iter_sampling = 100,
+#   chains = 4,
+#   parallel_chains = 4,
+#   init = pathfinder,
+#   output_dir = mod_dir,
+#   refresh = 0
+# )
+```
+
+```{r}
+fit <- brm(
+  formula = bf_med + bf_out + set_rescor(FALSE),
+  prior = prior_list,
+  data = df_model,
+  data2 = list(W = W_ord),
+  stanvars = stanvars,
+  seed = seed,
+  # algorithm = "pathfinder",
+  backend = "cmdstanr",
+  init = pathfinder,
+  iter = 400,
+  warmup = 200,
+  refresh = 100,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+### Summary
+
+```{r}
+fit
+```
+
+### Posterior Predictive Checks
+
+```{r}
+#| fig-width: 5
+#| fig-height: 2.5
+pp_check(fit, resp = "foodpriceabove1s12m")
+```
+
+### Calculate effects
+
+#### Settings
+
+```{r}
+n_draws <- 100
+drought_levels <- sort(as.integer(as.character(unique(df_model$clim))))
+fp_levels <- sort(as.integer(as.character(unique(df_model$food_price_above_1s_12m))))
+d0 <- drought_levels[1]
+d1 <- drought_levels[length(drought_levels)]
+```
+
+#### Predict Food Price Stress
+
+```{r}
+newdata_base <- df_model %>% select(-food_price_above_1s_12m)
+newdata_d1 <- (
+  newdata_base
+  %>% mutate(
+    clim = d1
+  )
+)
+newdata_d0 <- (
+  newdata_base
+  %>% mutate(
+    clim = d0
+  )
+)
+
+pp_fp_d1 <- posterior_predict(
+  fit,
+  resp = "foodpriceabove1s12m",
+  newdata = newdata_d1,
+  ndraws = n_draws,
+  re_formula = NULL
+)
+
+pp_fp_d0 <- posterior_predict(
+  fit,
+  resp = "foodpriceabove1s12m",
+  newdata = newdata_d0,
+  ndraws = n_draws,
+  re_formula = NULL
+)
+```
+
+#### Estimate effect of drought on food prices
+
+```{r}
+mean_pp_fp_d1 <- rowMeans(pp_fp_d1)
+mean_pp_fp_d0 <- rowMeans(pp_fp_d0)
+diff_pp_fp <- mean_pp_fp_d1 - mean_pp_fp_d0
+```
+
+```{r}
+(
+  ggplot()
+  + geom_histogram(
+    mapping = aes(
+      x = diff_pp_fp
+    )
+  )
+)
+```
+
+```{r}
+p11_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+p10_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+p00_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+```
+
+```{r}
+for (d in seq_len(n_draws)) {
+  
+  pp_fp_d0_d <- as.numeric(fp_levels)[pp_fp_d0[d, ]]
+  pp_fp_d1_d <- as.numeric(fp_levels)[pp_fp_d1[d, ]]
+  
+  newdata_11 <- (
+    newdata_base
+    %>% mutate(
+      clim = high_drought_level,
+      food_price_above_1s_12m = pp_fp_d1_d
+    )
+  )
+  newdata_10 <- (
+    newdata_base
+    %>% mutate(
+      clim = high_drought_level,
+      food_price_above_1s_12m = pp_fp_d0_d
+    )
+  )
+  newdata_00 <- (
+    newdata_base
+    %>% mutate(
+      clim = low_drought_level,
+      food_price_above_1s_12m = pp_fp_d0_d
+    )
+  )
+  
+  p11_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_11, transform = TRUE, draws = 1)
+  p10_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_10, transform = TRUE, draws = 1)
+  p00_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_00, transform = TRUE, draws = 1)
+
+  p11_mat[d, ] <- as.numeric(p11_draws[1, ])
+  p10_mat[d, ] <- as.numeric(p10_draws[1, ])
+  p00_mat[d, ] <- as.numeric(p00_draws[1, ])
+  
+}
+      
+```
+
+```{r}
+country_vec <- df_model[["country"]]
+countries <- unique(country_vec)
+country_indices <- split(seq_len(nrow(df_model)), country_vec)
+
+mean_p11_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p11_mat[, country_idxs]
+    } else {
+      rowMeans(p11_mat[, country_idxs])
+    }
+  }
+)
+
+mean_p10_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p10_mat[, country_idxs]
+    } else {
+      rowMeans(p10_mat[, country_idxs])
+    }
+  }
+)
+
+mean_p00_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p00_mat[, country_idxs]
+    } else {
+      rowMeans(p00_mat[, country_idxs])
+    }
+  }
+)
+```
+
+```{r}
+indirect_effect <- mean_p11_by_country - mean_p10_by_country
+direct_effect <- mean_p10_by_country - mean_p00_by_country
+total_effect <- mean_p11_by_country - mean_p00_by_country
+```
+
+```{r}
+summarise_effects <- function(x) {
+  c(
+    mean = mean(x, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE),
+    hdi1_low = bayestestR::hdi(x, ci = 0.5)$CI_low,
+    hdi1_high = bayestestR::hdi(x, ci = 0.5)$CI_high,
+    hdi2_low = bayestestR::hdi(x, ci = 0.95)$CI_low,
+    hdi2_high = bayestestR::hdi(x, ci = 0.95)$CI_high
+  )
+}
+```
+
+## With Random effects
+
+### Model Components
+
+```{r}
+test <- rgamma(100, shape = 2, scale = 0.3)
+```
+
+
+```{r}
+stanvars <- stanvar(5, "num_pred")
+
+prior_list_ranef <- c(
+  prior(student_t(3, -1, 0.4), class = "Intercept", resp = "foodpriceanomaly"),
+  prior(student_t(3, -1, 0.4), class = "Intercept", resp = "sv"),
+  prior(normal(0, (1.5 / sqrt(num_pred))), class = "b", resp = "sv"),
+  prior(gamma(2, 0.3), class = "sd", resp = "foodpriceanomaly"),
+  prior(gamma(2, 0.3), class = "sd", resp = "sv"),
+  # prior(exponential(1/0.3), class = "sd", resp = "foodpriceanomaly"),
+  # prior(exponential(1/0.3), class = "sd", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "morel_age_ord1", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "moschool_level1", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "mofood_price_above_1s_12m1", resp = "sv"),
+  # prior(dirichlet(1), class = "simo", coef = "moclim1", resp = "foodpriceanomaly"),
+  # prior(dirichlet(1), class = "simo", coef = "moclim1", resp = "sv"),
+  prior(normal(0, 0.3), class = "car", resp = "foodpriceanomaly"),
+  prior(exponential(1/0.3), class = "sdcar", resp = "foodpriceanomaly"),
+  prior(normal(0, 0.3), class = "car", resp = "sv"),
+  prior(exponential(1/0.3), class = "sdcar", resp = "sv")
+)
+
+bf_med_ranef <- bf(
+  (
+    food_price_anomaly | weights(sample_weight) ~ (
+      1 
+      + mo(clim) 
+      + (1 + mo(clim) | country)
+      + car(W, gr = adm_name, type = 'escar')
+    )
+  ),
+  family = cumulative(link = "logit")
+)
+
+bf_out_ranef <- bf(
+  as.formula(
+    paste(
+      viol_var,
+      "| weights(sample_weight)",
+      "~",
+      "(
+        1
+        + live_with_partner
+        + tolerate_women_violence
+        + rural
+        + mo(rel_age_ord)
+        + mo(school_level)
+        + mo(food_price_anomaly)
+        + mo(clim)
+        + (1 | country)
+        + (-1 + mo(food_price_anomaly)| country)
+        + (-1 + mo(clim)| country)
+        + car(W, gr = adm_name, type = 'escar')
+      )"
+    )
+  ),
+  # as.formula(
+  #   paste(
+  #     viol_var,
+  #     "| weights(sample_weight)",
+  #     "~",
+  #     "(
+  #       1 
+  #       + mo(food_price_anomaly)
+  #       + mo(clim)
+  #       + (1 | country)
+  #       + (-1 + mo(food_price_anomaly)| country)
+  #       + (-1 + mo(clim)| country)
+  #       + car(W, gr = adm_name, type = 'escar')
+  #     )"
+  #   )
+  # ),
+  family = bernoulli(link = "logit")
+)
+
+```
+
+### Approximate with Pathfinder
+
+```{r}
+stancode_ranef <- make_stancode(bf_med_ranef + bf_out_ranef + set_rescor(FALSE),
+                          prior = prior_list_ranef,
+                          data = df_model,
+                          data2 = list(W = W_ord),
+                          stanvars = stanvars)
+
+standata_ranef <- make_standata(bf_med_ranef + bf_out_ranef + set_rescor(FALSE),
+                          data = df_model,
+                          data2 = list(W = W_ord),
+                          stanvars = stanvars)
+
+writeLines(stancode_ranef, file.path(mod_dir, "full_model_spei_below_m1_food_anomalies_adult_all_viol_ranef.stan"))
+mod_ranef <- cmdstan_model(file.path(mod_dir, "full_model_spei_below_m1_food_anomalies_adult_all_viol_ranef.stan"))
+```
+
+```{r}
+pathfinder_ranef <- mod_ranef$pathfinder(
+  data = standata_ranef, 
+  seed = seed,
+  refresh = 0,
+  output_dir = mod_dir
+)
+```
+
+```{r}
+pdraws <- pathfinder_ranef$draws()
+summarise_draws(subset(pdraws, variable=c('lp__')), n_distinct)
+```
+
+### MCMC
+
+```{r}
+# fit_ranef <- mod$sample(
+#   data = standata,
+#   iter_warmup = 100,
+#   iter_sampling = 100,
+#   chains = 4,
+#   parallel_chains = 4,
+#   init = pathfinder,
+#   output_dir = mod_dir,
+#   refresh = 0
+# )
+```
+
+```{r}
+fit_ranef <- brm(
+  formula = bf_med_ranef + bf_out_ranef + set_rescor(FALSE),
+  prior = prior_list_ranef,
+  data = df_model,
+  data2 = list(W = W_ord),
+  stanvars = stanvars,
+  seed = seed,
+  # algorithm = "pathfinder",
+  # backend = "cmdstanr",
+  # init = pathfinder_ranef,
+  iter = 1000,
+  warmup = 500,
+  refresh = 100,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+### Posterior Predictive Checks
+
+```{r}
+#| fig-width: 5
+#| fig-height: 2.5
+pp_check(fit_ranef, resp = "foodpriceanomaly")
+```
+
+## Calculate effects
+
+### Settings
+
+```{r}
+drought_bounds <- (
+  df_model
+  %>% group_by(country)
+  %>% summarise(
+    min_drought = min(clim, na.rm = T),
+    max_drought = max(clim, na.rm = F)
+  )
+)
+fp_bounds <- (
+  df_model
+  %>% group_by(country)
+  %>% summarise(
+    min_fp = min(food_price_anomaly, na.rm = T),
+    max_fp = max(food_price_anomaly, na.rm = F)
+  )
+)
+d0 <- 0
+d1 <- setNames(drought_bounds$max_drought, drought_bounds$country)
+```
+
+```{r}
+n_draws <- 100
+# drought_levels <- sort(as.integer(as.character(unique(df_model$clim))))
+# fp_levels <- sort(as.integer(as.character(unique(df_model$food_price_above_1s_12m))))
+# d0 <- drought_levels[1]
+# d1 <- drought_levels[length(drought_levels)]
+
+country_vec <- df_model[["country"]]
+countries <- unique(country_vec)
+country_indices <- split(seq_len(nrow(df_model)), country_vec)
+```
+
+### Predict Food Price Stress
+
+```{r}
+newdata_base_ranef <- df_model %>% select(-food_price_anomaly)
+newdata_d1_ranef <- (
+  newdata_base_ranef
+  %>% mutate(
+    clim = factor(d1[country], levels = 0:12, ordered = T)
+  )
+)
+newdata_d0_ranef <- (
+  newdata_base_ranef
+  %>% mutate(
+    clim = factor(d0, levels = 0:12, ordered = T)
+  )
+)
+
+pp_fp_d1_ranef <- posterior_predict(
+  fit_ranef,
+  resp = "foodpriceanomaly",
+  newdata = newdata_d1_ranef,
+  ndraws = n_draws,
+  re_formula = NULL
+)
+
+pp_fp_d0_ranef <- posterior_predict(
+  fit_ranef,
+  resp = "foodpriceanomaly",
+  newdata = newdata_d0_ranef,
+  ndraws = n_draws,
+  re_formula = NULL
+)
+```
+
+### Estimate effect of drought on food prices
+
+```{r}
+mean_pp_fp_d0_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      pp_fp_d0_ranef[, country_idxs]
+    } else {
+      rowMeans(pp_fp_d0_ranef[, country_idxs] - 1)
+    }
+  }
+)
+
+mean_pp_fp_d1_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      pp_fp_d1_ranef[, country_idxs]
+    } else {
+      rowMeans(pp_fp_d1_ranef[, country_idxs] - 1)
+    }
+  }
+)
+```
+
+```{r}
+diff_pp_fp_by_country <- (
+  as_tibble(mean_pp_fp_d1_by_country - mean_pp_fp_d0_by_country)
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "country",
+    values_to = "diff_pp_fp"
+  )
+)
+```
+
+```{r}
+#| fig-width: 10
+#| fig-height: 2.5
+(
+  diff_pp_fp_by_country
+  %>% ggplot()
+  + geom_histogram(
+    mapping = aes(
+      x = diff_pp_fp,
+      fill = country
+    ),
+    bins = 30
+  )
+  + geom_vline(
+    xintercept = 0,
+    linetype = "dotted",
+    linewidth = 1,
+    color = "black"
+  )
+  + facet_wrap(
+    ~country,
+    nrow = 1,
+    scales = 
+  )
+  + paletteer::scale_fill_paletteer_d(
+      "wesanderson::Zissou1"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 0.5),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + scale_x_continuous(
+    breaks = seq(-2, 6, 2),
+    labels = as.character(seq(-2, 6, 2))
+  )
+  + coord_cartesian(clip = "off")
+  + guides(
+    fill = "none"
+  )
+  + labs(
+    x = "Food Price Strain\n(max(drought) - min(drought))",
+    y = "Counts"
+  )
+)
+      
+```
+
+```{r}
+(
+  df_model
+  %>% filter(country == "Lesotho")
+  %>% ggplot()
+  + geom_point(
+    aes(
+      x = clim,
+      y = food_price_anomaly
+    ),
+    position = "jitter"
+  )
+)
+  
+```
+
+```{r}
+p11_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+p10_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+p00_mat <- matrix(NA, nrow = n_draws, ncol = nrow(df_model))
+```
+
+```{r}
+for (d in seq_len(n_draws)) {
+  
+  pp_fp_d0_d <- as.numeric(fp_levels)[pp_fp_d0[d, ]]
+  pp_fp_d1_d <- as.numeric(fp_levels)[pp_fp_d1[d, ]]
+  
+  newdata_11 <- (
+    newdata_base
+    %>% mutate(
+      clim = high_drought_level,
+      food_price_above_1s_12m = pp_fp_d1_d
+    )
+  )
+  newdata_10 <- (
+    newdata_base
+    %>% mutate(
+      clim = high_drought_level,
+      food_price_above_1s_12m = pp_fp_d0_d
+    )
+  )
+  newdata_00 <- (
+    newdata_base
+    %>% mutate(
+      clim = low_drought_level,
+      food_price_above_1s_12m = pp_fp_d0_d
+    )
+  )
+  
+  p11_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_11, transform = TRUE, draws = 1)
+  p10_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_10, transform = TRUE, draws = 1)
+  p00_draws <- posterior_linpred(fit, resp = "sv", newdata = newdata_00, transform = TRUE, draws = 1)
+
+  p11_mat[d, ] <- as.numeric(p11_draws[1, ])
+  p10_mat[d, ] <- as.numeric(p10_draws[1, ])
+  p00_mat[d, ] <- as.numeric(p00_draws[1, ])
+  
+}
+      
+```
+
+```{r}
+country_vec <- df_model[["country"]]
+countries <- unique(country_vec)
+country_indices <- split(seq_len(nrow(df_model)), country_vec)
+
+mean_p11_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p11_mat[, country_idxs]
+    } else {
+      rowMeans(p11_mat[, country_idxs])
+    }
+  }
+)
+
+mean_p10_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p10_mat[, country_idxs]
+    } else {
+      rowMeans(p10_mat[, country_idxs])
+    }
+  }
+)
+
+mean_p00_by_country <- sapply(
+  country_indices,
+  function(country_idxs) {
+    if (length(country_idxs) == 1) {
+      p00_mat[, country_idxs]
+    } else {
+      rowMeans(p00_mat[, country_idxs])
+    }
+  }
+)
+```
+
+```{r}
+indirect_effect <- mean_p11_by_country - mean_p10_by_country
+direct_effect <- mean_p10_by_country - mean_p00_by_country
+total_effect <- mean_p11_by_country - mean_p00_by_country
+```
+
+```{r}
+summarise_effects <- function(x) {
+  c(
+    mean = mean(x, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    sd = sd(x, na.rm = TRUE),
+    hdi1_low = bayestestR::hdi(x, ci = 0.5)$CI_low,
+    hdi1_high = bayestestR::hdi(x, ci = 0.5)$CI_high,
+    hdi2_low = bayestestR::hdi(x, ci = 0.95)$CI_low,
+    hdi2_high = bayestestR::hdi(x, ci = 0.95)$CI_high
+  )
+}
+```
+
+```{r}
+draw_pp <- function(
+    fit, 
+    data, 
+    cov, 
+    out,
+    grid_vals,
+    ndraws = 100
+  ) {
+  
+  group_vec <- data[[group]]
+  groups <- unique(group_vec)
+  
+  draws_list <- vector("list", length(grid_vals))
+  newdata <- data %>% select(-out)
+  
+  for (i in seq_along(grid_vals)) {
+    newdata[[cov]] <- grid_vals[i]
+    group_indices <- split(seq_len(nrow(newdata)), group_vec)
+    draws_list[[i]] <- posterior_predict(
+      fit,
+      resp = str_replace_all(out, "_", ""),
+      newdata = newdata,
+      ndraws = ndraws,
+      re_formula = NULL
+    )
+
+  }
+  
+  list(
+    covariate_value = grid_vals,
+    output_value = draws_list
+  )
+}
+```
+
+```{r}
+ndraws <- 100
+fp_list <- draw_pp_by_group(
+  fit,
+  df_model,
+  cov = "clim",
+  out = "food_price_above_1s_12m",
+  grid_vals = levels_drought,
+  ndraws = ndraws
+)
+```
+
+```{r}
+sv_list <- vector("list", length(levels_drought))
+for (l in seq_along(levels_drought)) {
+  sv_pp <- matrix(NA, nrow = ndraws, ncol = nrow(df_model))
+  for (d in seq_len(ndraws)) {
+    newdata <- (
+      df_model
+      
+  
+```
+
+#### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+# mcmc_trace(as_draws_df(fit), pars = c("sdgp_gplonlat", "lscale_gplonlat", "zgp_gplonlat[1]"))
+mcmc_trace(as_draws_df(fit), pars = c("car", "sdcar", "rcar[1]"))
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(fit), 
+  # pars = c("b_Intercept", "sd_country__Intercept", "sdgp_gplonlat", "lscale_gplonlat", "zgp_gplonlat[1]"),
+  pars = c(
+    "b_Intercept", 
+    "sd_country__Intercept", 
+    "bsp_morel_age_ord", 
+    "bsp_moschool_level",
+    "bsp_moclim",
+    "car", 
+    "sdcar", 
+    "rcar[1]"
+  ),
+  np = nuts_params(fit),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+```{r}
+mcmc_parcoord(
+  as.array(fit), 
+  # pars = c("b_Intercept", "sd_country__Intercept", "sdgp_gplonlat", "lscale_gplonlat", "zgp_gplonlat[1]"),
+  pars = c("b_Intercept", "sd_country__Intercept", "car", "sdcar", "rcar[1]"),
+  np = nuts_params(fit),
+  np_style = parcoord_style_np(
+    div_color = "green",
+    div_alpha = 0.6,
+    div_size = 1.1
+  )
+)
+```
+
+```{r}
+plot(
+  fit, 
+  variable = "prior_b",
+  # variable = "b_tolerate_women_violence",
+  regex = TRUE, 
+  nvariables = 3
+)
+```
+
+```{r}
+plot(fit, variable = "^b_rural", regex = TRUE, nvariables = 3)
+```
+
+### Model Output
+
+##### Summary
+
+```{r}
+fit
+```
+
+##### Baseline
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+plot_baseline_levels(fit, lims = c(0, 0.25))
+```
+
+##### Marginal Average Effect for Categorical variables
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+plot_bin_marginal(fit, df_model, covs = bin_covs)
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_bin_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+##### Marginal Average Effect for Categorical variables by country
+
+```{r}
+#| fig-width: 13
+#| fig-height: 3
+plot_bin_marginal_by_group(fit, df_model, covs = bin_covs, group = "country")
+# ggsave(
+#   path = fig_dir,
+#   filename = paste0("marginal_prob_bin_", clim_label, "_", pop_label, "_", viol_label, "_nf.png")
+# )
+```
+
+##### Marginal Average Effect for other variables
+
+```{r}
+#| fig-width: 9
+#| fig-height: 3
+plot_mono_marginal(fit, df_model, covs = c("rel_age_ord", "school_level", "food_price_above_1s_12m"))
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_mono_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+##### Marginal Average Effect for other variables by country
+
+```{r}
+#| fig-width: 10
+#| fig-height: 3
+(
+  plot_mono_marginal_by_group(fit, df_model, covs = c("rel_age_ord", "school_level", "food_price_above_1s_12m"), dodge = 0.6)
+  + theme(
+    legend.position = "top"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_others_by_country_mono_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 3
+plot_mono_marginal_by_group(fit, df_model, covs = c("clim"), dodge = 0.8)
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_by_country_mono_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+```{r}
+# conditional_effects(fit, effects = c("rel_age_ord", "school_level", "clim"), group = "country")
+```
+
+### Calibration Checks
+
+```{r}
+#| fig-width: 3
+#| fig-height: 3
+plot_calibration(fit, df_model, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("calibration_plot_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3.5
+plot_calibration_weighted(fit, df_model, outcome_var = viol_var)
+```
+
+### Spatial Correlation Checks
+
+##### Raw values
+
+```{r}
+#| fig-width: 5
+#| fig-height: 2.5
+plot_moran(df_model, sf_vacs, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("moran_plot_obs_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+##### Residuals
+
+```{r}
+#| fig-width: 5
+#| fig-height: 2.5
+plot_moran(df_model, sf_vacs, fit = fit, residuals = TRUE)
+ggsave(
+  path = fig_dir,
+  filename = paste0("moran_plot_res_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+### Posterior Predictive Checks
+
+```{r}
+#| fig-width: 12
+#| fig-height: 2.5
+plot_ppc_rootogram(fit, df_model, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("ppc_by_adm_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```

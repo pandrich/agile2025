@@ -1,0 +1,700 @@
+---
+title: "UTCI Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/rainfall")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+```
+
+# Parameters
+
+```{r}
+coords <- list(
+  "MOZ" = c(30, 41.2, -26.9, -10.3),
+  "ZWE" = c(25.2, 33.1, -22.5, -15.45),
+  "LSO" = c(26.99, 29.46, -30.68, -28.55),
+  "NAM" = c(11.65, 25.27, -29, -16.9),
+  "ZMB" = c(21.95, 33.73, -18.1, -8.15),
+  "UGA" = c(29.55, 35.05, -1.49, 4.22),
+  "KEN" = c(33.90, 41.92, -4.68, 5.05)
+)
+
+# Country Mapping
+country_map <- sort(c(
+  "KEN" = "Kenya",
+  "LSO" = "Lesotho",
+  "MOZ" = "Mozambique",
+  "NAM" = "Namibia",
+  "UGA" = "Uganda",
+  "ZMB" = "Zambia",
+  "ZWE" = "Zimbabwe"
+))
+```
+
+# Functions
+
+```{r}
+build_rainfall <- function(rast_rain, adm_shapes) {
+  print(paste0("Starting rainfall data processing"))
+  rast_times <- as.character(terra::time(rast_rain))
+  df_rain <- (
+      rast_rain
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = "weighted_mean",
+        weights = "area",
+        max_cells_in_memory = 176067000,
+        append_cols = c("country", "adm_code", "adm_name"),
+        progress = FALSE
+      )
+    )
+  colnames(df_rain) <- c("country", "adm_code", "adm_name", rast_times)
+  df_rain <- (
+    df_rain
+    %>% pivot_longer(
+      cols = -c("country", "adm_code", "adm_name"),
+      names_to = "date",
+      values_to = "rainfall"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d")
+    )
+  )
+}
+
+build_weighted_rainfall_country <- function(
+    iso3, 
+    rast_rain, 
+    rast_pop, 
+    adm_pop,
+    adm_shapes, 
+    age_disag = FALSE
+  ) {
+  print(paste0("Starting processing rainfall data for: ", iso3))
+  if (age_disag) {
+    file_name = "age_weighted_rainfall_"
+  } else {
+    file_name = "weighted_rainfall_"
+  }
+  dfs_rain_times <- list()
+  rast_times <- terra::time(rast_rain)
+  thresholds <- round(quantile(seq_along(rast_times), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  for (i in seq_along(rast_times)) {
+    if (i %in% thresholds) {
+      thresh_idx <- which(thresholds == i)
+      print(paste0(names(thresh_idx), " complete"))
+    }
+    rast_rain_time  <- (
+      rast_rain[[paste0("precipitation_amount_", i)]]
+      %>% terra::crop(terra::ext(unlist(coords[iso3])))
+    )
+    rast_rain_time_fine <- terra::resample(rast_rain_time, rast_pop)
+    rast_rain_weighted <- rast_rain_time_fine * rast_pop
+    dfs_rain_times[[i]] <- (
+      rast_rain_weighted
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+        max_cells_in_memory = 176067000,
+        append_cols = c("country", "adm_code"),
+        progress = FALSE
+      )
+      %>% merge(
+        adm_pop,
+        by = "adm_code",
+        all.x = TRUE
+      )
+      %>% mutate(
+        date = as.Date(rast_times[[i]], format = "%Y-%m-%d"),
+        rainfall = (result / pop)
+      )
+    )
+  }
+  df_rain <- (
+    bind_rows(dfs_rain_times)
+    %>% select(-c(pop, result))
+    %>% mutate(
+      country = country_map[[iso3]]
+    )
+    %>% relocate(country)
+  )
+  # if (age_disag) {
+  #   df_rain <- (
+  #     df_rain
+  #     %>% rename(
+  #       popf_10_19 = pop
+  #     )
+  #   )
+  # }
+  df_rain %>% write_csv(file.path(proc_data_dir, paste0(file_name, iso3, ".csv")))
+  df_rain
+}
+
+
+# build_weighted_rainfall_rast <- function(rain_rast, pop_rast) {
+#   rain_poly <- (
+#     rain_rast
+#     %>% terra::as.polygons(values = FALSE, dissolve = FALSE, na.rm = FALSE)
+#   )
+#   pop_sum <- (
+#     terra::extract(
+#       pop_rast,
+#       rain_poly,
+#       na.rm = TRUE,
+#       cells = TRUE,
+#       exact = TRUE
+#     )
+#     %>% group_by(cell)
+#     %>% mutate(
+#       fraction = fraction / sum(fraction, na.rm = TRUE)
+#     )
+#     %>% group_by(ID)
+#     %>% summarise(
+#       pop = sum(pop * fraction, na.rm = TRUE)
+#     )
+#   )
+#   rain_weighted_mat <- terra::values(rain_rast, mat = TRUE) * pop_sum$pop
+#   rain_weighted <- terra::rast(rain_rast)
+#   terra::values(rain_weighted) <- rain_weighted_mat
+#   
+#   rain_weighted
+# }
+#   
+# build_weighted_adm_rainfall_df <- function(rain_rast_weighted, adm_pop, adm_shapes) {
+#   
+#   rast_times <- terra::time(rain_rast_weighted)
+#   
+#   adm_rain_weighted <- (
+#     rain_rast_weighted
+#     %>% terra::extract(
+#       adm_shapes,
+#       cells = TRUE,
+#       na.rm = TRUE,
+#       exact = TRUE
+#     )
+#     %>% group_by(cell)
+#     %>% mutate(
+#       fraction = fraction / sum(fraction, na.rm = TRUE)
+#     )
+#     %>% group_by(ID)
+#     %>% summarise(
+#       across(-c(cell, fraction), ~ sum((.) * fraction, na.rm = TRUE))
+#     )
+#     %>% mutate(
+#       pop = adm_pop$pop,
+#     )
+#     %>% mutate(
+#       across(-c(ID, pop), ~ (.)/pop)
+#     )
+#     %>% as.data.frame()
+#     %>% rename(
+#       id = ID
+#     )
+#     %>% select(-pop)
+#   )
+#   names(adm_rain_weighted) <- c("id", as.character(rast_times))
+#   
+#   adm_rain_weighted <- (
+#     adm_rain_weighted
+#     %>% pivot_longer(
+#       cols = -id,
+#       names_to = "date",
+#       values_to = "rainfall"
+#     )
+#     %>% mutate(
+#       date = as.Date(date)
+#     )
+#   )
+#   
+#   df_adm_rain_weighted <- (
+#     adm_shapes
+#     %>% merge(
+#       adm_rain_weighted,
+#       by = "id",
+#       all.x = TRUE
+#     )
+#     %>% as.data.frame()
+#     %>% select(-c(id, geometry))
+#   )
+#   df_adm_rain_weighted
+# }
+```
+
+# Data Import
+
+## Geographies
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+## All Population
+
+```{r}
+rast_pop_uga <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2024_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2024_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_uga <- (
+  rast_pop_uga
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+## 10-19 Female Population
+
+```{r}
+# Age brackets to consider
+ages <- c(10, 15)
+```
+
+```{r}
+rast_pops <- list()
+for (i in seq_along(ages)) {
+  rast_pops[[i]] <- (
+    terra::rast(
+      file.path(
+        raw_data_dir, 
+        "population", 
+        "disaggregated",
+        "uga_agesex_structures_2024_CN_1km_R2025A_UA_v1",
+        sprintf("uga_f_%02d_2024_CN_1km_R2025A_UA_v1.tif", ages[[i]])
+      )
+    )
+    %>% rename(
+      pop = sprintf("global_f_%02d_2024_CN_1km_R2025A_v1", ages[[i]])
+    )
+  )
+}
+
+rast_popf_10_19_uga <- (
+  sum(terra::rast(rast_pops))
+  %>% rename(
+    pop = sum
+  )
+)
+```
+
+```{r}
+adm_popf_10_19_uga <- (
+  rast_popf_10_19_uga
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+## Rainfall
+
+```{r}
+rast_rain_uga <- terra::rast(
+  file.path(
+    raw_data_dir,
+    "rainfall",
+    "rainfall_UGA.nc"
+  )
+)
+n_layers <- terra::nlyr(rast_rain_uga)
+```
+
+# Method Outline
+
+Data obtained using the Climate Data Store API
+
+```{r}
+# For plotting
+xlims <- c(32, 33.4)
+ylims <- c(-0.15, 1.2)
+plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[2] + 0.5)
+date <- terra::time(rast_rain_uga)[[n_layers]]
+```
+
+```{r}
+rast_rain_uga_1  <- (
+  rast_rain_uga[[paste0("precipitation_amount_", n_layers)]]
+  %>% terra::crop(terra::ext(29.55, 35.05, -1.49, 4.22))
+)
+```
+
+## Rainfall in country
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_rain_uga_1,
+    mapping = aes(fill = !!sym(paste0("precipitation_amount_", n_layers)))
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    fill = "Rainfall"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_uga.png",
+  width = 5,
+  height = 4
+)
+```
+
+## Downsample one time step
+
+```{r}
+rast_rain_fine_uga <- terra::resample(rast_rain_uga_1, rast_pop_uga)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_rain_fine_uga %>% terra::crop(plot_extent),
+    mapping = aes(fill = !!sym(paste0("precipitation_amount_", n_layers)))
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Rainfall"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_fine_uga_zoom.png",
+  width = 5,
+  height = 4
+)
+```
+
+## Population scaled rainfall
+
+```{r}
+rast_rain_weighted_uga <- rast_rain_fine_uga * rast_pop_uga
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4
+
+p1 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_uga %>% terra::crop(plot_extent),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+
+p2 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_rain_weighted_uga %>% terra::crop(plot_extent),
+    mapping = aes(fill = !!sym(paste0("precipitation_amount_", n_layers)))
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Rainfall * Population"
+  )
+)
+
+p1 + p2
+
+ggsave(
+  path = fig_dir,
+  filename = "rain_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+## Weighted Rainfall
+
+```{r}
+df_rain_uga_test <- (
+  rast_rain_weighted_uga
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code"),
+    progress = FALSE
+  )
+  %>% merge(
+    adm_pop_uga,
+    by = "adm_code",
+    all.x = TRUE
+  )
+  %>% mutate(
+    date = as.Date(date, format = "%Y-%m-%d"),
+    rainfall = (result / pop)
+  )
+  %>% select(-result)
+)
+```
+
+```{r}
+sf_rain_uga <- (
+  sf_uga
+  %>% select(adm_code)
+  %>% merge(
+    df_rain_uga_test,
+    by = "adm_code",
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_rain_uga,
+    mapping = aes(fill = rainfall),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted rainfall",
+    fill = "Rainfall"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rain_weighted_uga.png",
+  width = 4,
+  height = 5
+)
+```
+
+# Generate datasets
+
+## Rainfall
+
+```{r}
+df_rain_uga <- build_rainfall(rast_rain_uga, sf_uga)
+```
+
+## Population weighted rainfall
+
+```{r}
+df_weighted_rain_uga <- build_weighted_rainfall_country("UGA", rast_rain_uga, rast_pop_uga, adm_pop_uga, sf_uga)
+```
+
+## Age population weighted rainfall
+
+```{r}
+df_age_weighted_rain_uga <- build_weighted_rainfall_country("UGA", rast_rain_uga, rast_pop_uga, adm_pop_uga, sf_uga, age_disag = TRUE)
+```
+
+# Save
+
+```{r}
+df_rain_uga %>% write_csv(file.path(proc_data_dir, "rain_all_countries.csv"))
+```
+
+```{r}
+df_weighted_rain_uga %>% write_csv(file.path(proc_data_dir, "weighted_rain_all_countries.csv"))
+```
+
+```{r}
+df_age_weighted_rain_uga %>% write_csv(file.path(proc_data_dir, "age_weighted_rain_all_countries.csv"))
+```

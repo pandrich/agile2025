@@ -1,0 +1,808 @@
+---
+title: "Process Food Security"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(paletteer)
+library(spdep)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/food_security")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+
+# Settings
+nb_name <-  "Process Food Security"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Country Mapping
+country_map <- c(
+  "MOZ" = "Mozambique",
+  "ZWE" = "Zimbabwe",
+  "LSO" = "Lesotho",
+  "NAM" = "Namibia",
+  "ZMB" = "Zambia",
+  "UGA" = "Uganda",
+  "KEN" = "Kenya"
+)
+```
+
+# Functions
+
+```{r}
+neighbors_at_hop <- function(nb_list, start_idx, h) {
+  if (h <= 0) return (integer(0))
+  if (h == 1) return (nb_list[[start_idx]])
+  visited <- integer(0)
+  frontier <- unique(nb_list[[start_idx]])
+  if (length(frontier) == 0) return(integer(0))
+  step <- 1
+  # We reconstruct the frontier for starting index `start_idx` after step h
+  while (step < h) {
+    step <- step + 1
+    next_nodes <- if (length(frontier) > 0) unique(unlist(nb_list[frontier], use.names = FALSE)) else integer(0)
+    # remove already seen and current frontier to advance
+    next_frontier <- setdiff(next_nodes, c(visited, frontier))
+    if (length(next_frontier) == 0) return(integer(0))
+    visited <- c(visited, frontier)
+    frontier <- next_frontier
+  }
+  setdiff(frontier, start_idx)
+}
+
+impute_price_with_nbs <- function(g, y) {
+  ct_val <- g[["country"]][1]
+  nb <- nb_by_country[[ct_val]]
+  vals <- g[["food_price_kg"]]
+  nas <- which(is.na(vals))
+  if (length(nas) > 0) {
+      for (i in nas) {
+        for (h in 1:max_hops) {
+          candidates <- neighbors_at_hop(nb, i, h)
+          if (length(candidates) == 0L) next
+          cand_vals <- vals[candidates]
+          cand_vals <- cand_vals[!is.na(cand_vals)]
+          if (length(cand_vals) > 0L) {
+            vals[i] <- mean(cand_vals)
+            break
+          }
+        }
+      }
+    g[["food_price_kg"]] <- vals
+  }
+  g %>% select(-c(country, date))
+}
+```
+
+# Load Data
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Uganda
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% st_transform(4326)
+)
+```
+
+### Kenya
+
+```{r}
+sf_ken <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Kenya 2022 DHS - sdr_subnational_boundaries_2025-11-13", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### HFID geographies
+
+From: https://zenodo.org/records/15017473
+
+```{r}
+sf_hfid <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "food_security",
+      "simplified_hfid_geom.gpkg"
+    )
+  )
+  %>% rename_with(str_to_lower)
+  %>% filter(
+    admin0 %in% country_map
+  )
+  %>% select(
+    country = admin0,
+    adm1_name = admin1,
+    adm2_name = admin2
+  )
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+    sf_uga,
+    sf_ken
+  )
+  %>% st_make_valid()
+)
+```
+
+## Food Securty
+
+Data from:https://zenodo.org/records/15017473
+
+```{r}
+df_fs <- (
+  read_csv(
+    file.path(
+      raw_data_dir,
+      "food_security",
+      "hfid_hv1.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% rename_with(~ str_to_lower(str_replace_all(., " ", "_")))
+  %>% filter(
+    admin0 %in% country_map
+  )
+  %>% mutate(
+    date = lubridate::ceiling_date(
+      as.Date(paste0(year_month, "-01"), format = "%Y-%m-%d"),
+      unit = "month"
+    ) - lubridate::days(1)
+  )
+  %>% rename(
+    country = admin0,
+    adm1_name = admin1,
+    adm2_name = admin2,
+  )
+  %>% select(
+    date,
+    country,
+    adm1_name,
+    adm2_name,
+    matches("fews|ipcch|fcs|rcsi")
+  )
+  %>% arrange(
+    country,
+    adm1_name,
+    adm2_name,
+    date
+  )
+)
+```
+
+# Combine data
+
+```{r}
+df_fs_adm1 <- (
+  df_fs
+  %>% group_by(
+    country, 
+    adm_name = adm1_name,
+    date
+  )
+  %>% summarise(
+    across(
+      where(is.numeric),
+      ~ mean(., na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+colMeans(is.na(df_fs_adm1))
+```
+
+# Visualizations
+
+## Data
+
+```{r}
+df_viz <- (
+  df_fs_adm1
+  %>% pivot_longer(
+    cols = -c(country, adm_name, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% filter(
+    variable %in% c(
+      "ha_fews",
+      "ha_ipcch",
+      "fcs_lit",
+      "rcsi_lit",
+      "fcs_rt_mean",
+      "rcsi_rt_mean",
+      "ipc_phase_fews",
+      "ipc_phase_ipcch"
+    )
+  )
+)
+```
+
+
+### Mozambique
+
+#### Population prevalence
+
+fcs_rt_mean: monthly average of population prevalence of insufficient food consumption score from the WFP-RT source (FCS-RT variable) if available, else NaN. Possible values: between 0 and 1.
+
+rcsi_rt mean: monthly average of population prevalence of crisis or above reduced Coping Strategy Index from the WFP-RT source (rCSI-RT variable) if available, else NaN. Possible values: between 0 and 1.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+years <- seq(2021, 2024)
+num_years <- length(years)
+(
+  df_viz
+  %>% filter(
+    date >= "2020-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Maputo City", "Inhambane")),
+    !str_detect(variable, "ha")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "fcs_rt_mean" = col_palette[1],
+      "rcsi_rt_mean" = col_palette[5]
+    ),
+    labels = c(
+      "fcs_rt_mean" = "FCS-RT",
+      "rcsi_rt_mean" = "rCSI-RT"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2024-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.07, 0.77),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "food_ins_prevalence_moz.png"
+)
+```
+
+#### Phase classification
+
+ipc_phase_fews: FEWS NET-IPC compatible phase classification (phase-FEWS variable) if available, else NaN. Possible values: 1,2,3,4,5.
+
+ipc_phase_ipcch: IPC/CH Phase classification (phase-IPC/CH variable) if available, else NaN. Possible values: 1,2,3,4,5,6.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+min_year <- min(year(df_viz$date))
+max_year <- max(year(df_viz$date))
+years <- seq(min_year, max_year)
+num_years <- length(years)
+years_labels <- rep("", num_years)
+years_labels[seq(1, num_years, by = 5)] <- seq(min_year, max_year, by = 5)
+(
+  df_viz
+  %>% filter(
+    # date >= "2020-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Maputo City", "Inhambane")),
+    str_detect(variable, "phase")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "ipc_phase_fews" = col_palette[3],
+      "ipc_phase_ipcch" = col_palette[7]
+    ),
+    labels = c(
+      "ipc_phase_fews" = "IPC-FEWS",
+      "ipc_phase_ipcch" = "IPC-IPCCH"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), years_labels),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2024-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.08, 0.94),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "ipc_phase_moz.png"
+)
+```
+
+
+#### Humanitarian Aid
+
+ha_fews: 1 if humanitarian aid has been distributed (owing to FEWS NET source), else NaN.
+
+ha_ipcch: 1 if humanitarian aid has been distributed (owing to IPC API source), else NaN.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+min_year <- min(year(df_viz$date))
+max_year <- max(year(df_viz$date))
+years <- seq(min_year, max_year)
+num_years <- length(years)
+years_labels <- rep("", num_years)
+years_labels[seq(1, num_years, by = 5)] <- seq(min_year, max_year, by = 5)
+(
+  df_viz
+  %>% filter(
+    # date >= "2020-01-01",
+    country == "Mozambique",
+    !(adm_name %in% c("Maputo City", "Inhambane")),
+    str_detect(variable, "ha_")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "ha_fews" = "cornflowerblue",
+      "ha_ipcch" = "firebrick"
+    ),
+    labels = c(
+      "ha_fews" = "HA-FEWS",
+      "ha_ipcch" = "HA-IPCCH"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), years_labels),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date("2024-01-01"))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.08, 0.94),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "ha_moz.png"
+)
+```
+
+### Zimbabwe
+
+#### Population prevalence
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+years <- seq(2021, 2024)
+num_years <- length(years)
+(
+  df_viz
+  %>% filter(
+    # date >= "2020-01-01",
+    country == "Zimbabwe",
+    !(adm_name %in% c("Harare")),
+    !str_detect(variable, "ha")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "fcs_rt_mean" = col_palette[1],
+      "rcsi_rt_mean" = col_palette[5]
+    ),
+    labels = c(
+      "fcs_rt_mean" = "FCS-RT",
+      "rcsi_rt_mean" = "rCSI-RT"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), rep(years)),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(max_year, "-12-31")))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.25, 0.94),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "food_ins_prevalence_zwe.png"
+)
+```
+
+#### Phase classification
+
+ipc_phase_fews: FEWS NET-IPC compatible phase classification (phase-FEWS variable) if available, else NaN. Possible values: 1,2,3,4,5.
+
+ipc_phase_ipcch: IPC/CH Phase classification (phase-IPC/CH variable) if available, else NaN. Possible values: 1,2,3,4,5,6.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+min_year <- min(year(df_viz$date))
+max_year <- max(year(df_viz$date))
+years <- seq(min_year, max_year)
+num_years <- length(years)
+years_labels <- rep("", num_years)
+years_labels[seq(1, num_years, by = 5)] <- seq(min_year, max_year, by = 5)
+(
+  df_viz
+  %>% filter(
+    # date >= "2020-01-01",
+    country == "Zimbabwe",
+    !(adm_name %in% c("Harare")),
+    str_detect(variable, "phase")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "ipc_phase_fews" = col_palette[3],
+      "ipc_phase_ipcch" = col_palette[7]
+    ),
+    labels = c(
+      "ipc_phase_fews" = "IPC-FEWS",
+      "ipc_phase_ipcch" = "IPC-IPCCH"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), years_labels),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(max_year, "-12-31")))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.08, 0.94),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "ipc_phase_zwe.png"
+)
+```
+
+
+#### Humanitarian Aid
+
+ha_fews: 1 if humanitarian aid has been distributed (owing to FEWS NET source), else NaN.
+
+ha_ipcch: 1 if humanitarian aid has been distributed (owing to IPC API source), else NaN.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+min_year <- min(year(df_viz$date))
+max_year <- max(year(df_viz$date))
+years <- seq(min_year, max_year)
+num_years <- length(years)
+years_labels <- rep("", num_years)
+years_labels[seq(1, num_years, by = 5)] <- seq(min_year, max_year, by = 5)
+(
+  df_viz
+  %>% filter(
+    country == "Zimbabwe",
+    !(adm_name %in% c("Harare")),
+    str_detect(variable, "ha_")
+  )
+  %>% ggplot(
+    aes(x = date, y = value, color = variable)
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 3,
+  )
+  + geom_line()
+  + scale_color_manual(
+    values = c(
+      "ha_fews" = "cornflowerblue",
+      "ha_ipcch" = "firebrick"
+    ),
+    labels = c(
+      "ha_fews" = "HA-FEWS",
+      "ha_ipcch" = "HA-IPCCH"
+    )
+  )
+  + scale_x_date(
+    breaks = c(as.Date(paste0(c(years, years[length(years)] + 1), "-01-01")), as.Date(paste0(years, "-07-01"))),
+    labels = c(rep(c(""), num_years + 1), years_labels),
+    limits = c(as.Date(paste0(years[1], "-01-01")), as.Date(paste0(max_year, "-12-31")))
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    axis.ticks.x = element_line(color = c(rep("black", num_years + 1), rep(NA, num_years + 1))),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 11),
+    legend.position = "inside",
+    legend.position.inside = c(0.08, 0.94),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 14)
+  )
+  + labs(
+    x = "Date",
+    y = "Population Prevalence"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "ha_zwe.png"
+)
+```

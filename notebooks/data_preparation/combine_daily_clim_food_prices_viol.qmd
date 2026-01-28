@@ -1,5 +1,5 @@
 ---
-title: "Combine climate data from daily sources, food prices, and violence data"
+title: "Combine climate data, food prices, and violence data"
 format: html
 editor: visual
 ---
@@ -28,6 +28,10 @@ seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8
 set.seed(seed)
 ```
 
+```{r}
+print(paste("Using violence file:", viol_file))
+```
+
 # Import data
 
 ## Population
@@ -42,6 +46,9 @@ df_pop <- (
     ),
     show_col_types = FALSE
   )
+  %>% mutate(
+    log_pop_density = log10(pop)
+  )
   %>% select(
     country,
     adm_code,
@@ -51,17 +58,14 @@ df_pop <- (
 )
 ```
 
-
-
 ## Climate
 
-The dataset contains entries for each day. To match it with the violence data we calculate the mean over all the entries in each month. 
-This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
+The dataset contains entries for each day (note that the SPEI data occurs only once a month as it is on a monthly basis). To match it with the violence data we calculate the mean over all the entries in each month. This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
 
 ```{r}
 df_clim <- (
   read_csv(
-    file.path(proc_data_dir, "processed_utci_temp_daily.csv"),
+    file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"),
     show_col_types = FALSE
   )
   %>% group_by(
@@ -90,12 +94,14 @@ df_food_prices <- (
     adm_code,
     adm_name,
     date,
-    food_price_dev_12m,
+    food_price_above_1sd,
+    food_price_anomaly,
+    food_price_above_1sd_12m,
+    food_price_anomaly_12m,
     food_stress_12m
   )
 )
 ```
-
 
 ## Violence
 
@@ -121,6 +127,30 @@ df_viol <- (
 ```
 
 # Combine datasets
+
+## Climate and Food Prices
+
+```{r}
+df_clim_fp <- (
+  df_clim
+  %>% merge(
+    df_food_prices,
+    by = c(
+      "country",
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% filter(
+    !is.na(food_price_anomaly)
+  )
+  %>% select(-adm_code)
+)
+```
+
+## All
 
 ```{r}
 df_clim_fp_viol <- (
@@ -160,10 +190,9 @@ df_clim_fp_viol <- (
 ```{r}
 (
   df_clim_fp_viol
-  %>% filter(is.na(food_price_dev_12m))
+  %>% filter(is.na(value_utci_max_above_1sd_12m))
 )
 ```
-
 
 ```{r}
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
@@ -171,10 +200,10 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
   ggplot(
     data = df_clim_fp_viol, 
     aes(
-      x = dev_value_weighted_utci_max_above_32_12m, 
+      # x = dev_value_utci_max_above_32_12m,
+      x = value_spei_below_m1_12m,
       fill = country
-    ),
-    color = "black"
+    )
   )
   + geom_histogram(
     position = "stack"
@@ -199,6 +228,9 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
 )
 ```
 
+# Save
+
 ```{r}
+df_clim_fp %>% write_csv(file.path(model_data_dir, "climate_food_prices.csv"))
 df_clim_fp_viol %>% write_csv(file.path(model_data_dir, "climate_food_prices_violence.csv"))
 ```

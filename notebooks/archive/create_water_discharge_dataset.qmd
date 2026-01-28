@@ -1,0 +1,73 @@
+---
+title: "UTCI Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+water_data_dir <- file.path(raw_data_dir, "climate", "uganda_water_discharge")
+proc_data_dir <- root("data/processed/climate/uganda_water_discharge")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+```
+
+# Data Import
+
+## Geographies
+
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Uganda",
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    country,
+    adm_code = objectid,
+    adm_name = district
+  )
+  %>% mutate(
+    adm_area = unclass(st_area(geometry)) / 1E6, #km^2
+  )
+  %>% st_transform(4326)
+)
+```
+
+## Water 
+
+```{r}
+rast_water <- terra::rast(file.path(water_data_dir, "GRDC-Daily.nc"))
+```
+
+
+# Save
+
+```{r}
+adm_pop %>% write_csv(file.path(proc_data_dir, "adm_pop_all_countries.csv"))
+```

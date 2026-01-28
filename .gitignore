@@ -15,6 +15,7 @@ cache/
 
 # Ignore data folders
 data/
+temp/
 
 # Ignore output folders
 videos/
