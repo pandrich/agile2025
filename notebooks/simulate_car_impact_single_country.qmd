@@ -1,0 +1,1023 @@
+---
+title: "Test CAR Impact"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(spdep)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(ggdist)
+library(bayesplot)
+library(tidybayes)
+library(patchwork)
+library(tidytext)
+library(reliabilitydiag)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+temp_dir <- root("temp")
+dir.create(temp_dir, showWarnings = FALSE)
+raw_data_dir <- root("data/raw")
+model_data_dir <- root("data/processed/model_data")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+src_dir <- root("src")
+```
+
+# Notebook settings
+
+```{r}
+# Settings
+nb_name <-  "Test CAR effect with simulations"
+seed <- 686989 #sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Simulation settings
+N <- 8000
+
+# Computation settings
+adapt_delta = 0.95
+```
+
+# Functions
+
+```{r}
+source(file.path(src_dir, "viz.R"))
+source(file.path(src_dir, "model_check_utils.R"))
+
+inv_logit <- function(x) {
+  exp(x) / (1 + exp(x))
+}
+```
+
+# Import spatial data
+
+## Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+## Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+## Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+## Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+## Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+# Adjacency matrix
+
+```{r}
+sf_data <- sf_nam
+```
+
+
+```{r}
+nb_list <- poly2nb(sf_data)
+W <- nb2mat(nb_list, style = "B", zero.policy = TRUE)
+rownames(W) <- sf_data$adm_code
+colnames(W) <- sf_data$adm_code
+```
+
+```{r}
+edges <- (
+  geostan::edges(W, unique_pairs_only = TRUE, shape = sf_data$geometry)
+)
+graph <- st_geometry(edges)
+```
+
+```{r}
+plot(sf_data$geometry, lwd = .15)
+plot(graph, add = TRUE, type = "p", col = "red")
+plot(graph, add = TRUE, type = "l", col = "black")
+```
+
+# Model parts
+
+```{r}
+prior_list_ns <- c(
+  prior(student_t(3, -2, 0.4), class = "Intercept"),
+  prior(normal(0, 0.5), class = "b")
+)
+
+form_ns <- bf(sv ~ 1 + clim)
+
+prior_list_adm_only <- c(
+  prior(student_t(3, -2, 0.4), class = "Intercept")
+)
+
+form_adm_only <- bf(sv ~ 1 + (1 | adm_code))
+
+prior_list_adm <- c(
+  prior(student_t(3, -2, 0.4), class = "Intercept"),
+  prior(normal(0, 0.5), class = "b")
+)
+
+form_adm <- bf(sv ~ 1 + clim + (1 | adm_code))
+
+prior_list_with_u <- c(
+  prior(student_t(3, -2, 0.4), class = "Intercept"),
+  prior(normal(0, 0.5), class = "b")
+)
+
+form_with_u <- bf(sv ~ 1 + clim + u + (1 | adm_code))
+
+prior_list_only_sp <- c(
+  prior(normal(-1, 0.5), class = "Intercept"),
+  prior(normal(0, 0.5), class = "rhocar"),
+  prior(exponential(1), class = "sdcar")
+)
+
+form_only_sp <- bf(
+  sv ~ (
+    1 
+    + car(
+      W, 
+      gr = adm_code, 
+      type = "bym2"
+    )
+  )
+)
+
+prior_list_sp <- c(
+  prior(normal(-1, 0.5), class = "Intercept"),
+  prior(normal(0, 1), class = "b"),
+  prior(normal(0, 0.5), class = "rhocar"),
+  # prior(student_t(3, 0, 1), class = "sdcar")
+  prior(exponential(1), class = "sdcar")
+)
+
+form_sp <- bf(
+  sv ~ (
+    1 
+    + clim 
+    + car(
+      W, 
+      gr = adm_code, 
+      type = "bym2"
+    )
+  )
+)
+```
+
+
+# Fixed climate per admin area, no SAR
+
+## Simulation
+
+```{r}
+set.seed(seed)
+n_loc <- nrow(sf_data)  # locations
+clim_adm <- rnorm(n_loc, 0, 1)
+alpha <- -1
+b_clim <- 2
+
+loc <- vector("integer", length = N)
+clim <- vector("numeric", length = N)
+sv <- vector("integer", length = N)
+for (i in 1:N) {
+  loc[[i]] <- sample(1:n_loc, 1, replace = TRUE)
+  clim[[i]] <- clim_adm[loc[[i]]]
+  sv[[i]] <- rbinom(1, size = 1, p = inv_logit(alpha + b_clim * clim[[i]]))
+}
+
+df_sim_1 <- (
+  tibble(
+    adm_code = factor(as.character(loc), levels = as.character(seq(1, n_loc))),
+    clim = clim,
+    sv = sv
+  )
+  %>% arrange(adm_code)
+)
+```
+
+
+## Modeling
+
+### No Spatial Autocorrelation
+
+```{r}
+fit_ns_1 <- brm(
+  formula = form_ns,
+  family = bernoulli("logit"),
+  prior = prior_list_ns,
+  data = df_sim_1,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+fit_ns_1
+```
+
+### With only admin level random effects
+
+```{r}
+fit_adm_only_1 <- brm(
+  formula = form_adm_only,
+  family = bernoulli("logit"),
+  prior = prior_list_adm_only,
+  data = df_sim_1,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+fit_adm_only_1
+```
+
+
+### With admin level random effects
+
+```{r}
+fit_adm_1 <- brm(
+  formula = form_adm,
+  family = bernoulli("logit"),
+  prior = prior_list_adm,
+  data = df_sim_1,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+fit_adm_1
+```
+
+### With Spatial Autocorrelation
+
+```{r}
+fit_sp_1 <- brm(
+  formula = form_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_sp,
+  data = df_sim_1,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(
+  #   adapt_delta = 0.99,
+  #   max_treedepth = 15
+  # ),
+  # sample_prior = "only"
+  # sample_prior = TRUE
+)
+```
+
+#### Prior Checks
+
+```{r}
+test_data <- (
+  expand.grid(
+    clim = seq(
+      min(df_sim_1$clim),
+      max(df_sim_1$clim),
+      length.out = 20
+    ),
+    adm_code = unique(df_sim_1$adm_code)
+  )
+)
+```
+
+```{r}
+prior_epred_1 <- (
+  test_data
+  %>% add_epred_draws(
+    fit_sp_1,
+    ndraws = 20,
+    re_formula = NULL
+  )
+)
+```
+
+```{r}
+(
+  prior_epred_1
+  %>% ggplot(
+    aes(
+      x = .epred,
+      height = after_stat("density")
+    )
+  )
+  + geom_density()
+)
+```
+
+#### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_sp_1$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+mcmc_trace(as_draws_df(fit_sp_1), pars = c("rhocar", "sdcar", "rcar[1]"))
+```
+
+
+
+```{r}
+fit_sp_1
+```
+
+
+# Flexible climate for admin area, no SAR
+
+## Simulation
+
+```{r}
+set.seed(seed)
+n_loc <- nrow(sf_data)  # locations
+clim_adm <- rnorm(n_loc, 0, 1)
+alpha <- -1
+b_clim <- 0.22
+
+loc <- vector("integer", length = N)
+clim <- vector("numeric", length = N)
+sv <- vector("integer", length = N)
+
+for (i in 1:N) {
+  loc[[i]] <- sample(1:n_loc, 1, replace = TRUE)
+  clim[[i]] <- rnorm(1, clim_adm[loc[[i]]], 0.2)
+  sv[[i]] <- rbinom(1, size = 1, p = inv_logit(alpha + b_clim * clim[[i]]))
+}
+
+df_sim_2 <- (
+  tibble(
+    adm_code = factor(as.character(loc), levels = as.character(seq(1, n_loc))),
+    clim = clim,
+    sv = sv
+  )
+  %>% arrange(adm_code)
+)
+```
+
+## Modeling
+
+### No Spatial Autocorrelation
+
+```{r}
+fit_ns_2 <- brm(
+  formula = form_ns,
+  family = bernoulli("logit"),
+  prior = prior_list_ns,
+  data = df_sim_2,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+fit_ns_2
+```
+
+### With admin level random effects
+
+```{r}
+fit_adm_2 <- brm(
+  formula = form_adm,
+  family = bernoulli("logit"),
+  prior = prior_list_adm,
+  data = df_sim_2,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+```{r}
+fit_adm_2
+```
+
+### With Spatial Autocorrelation
+
+```{r}
+fit_sp_2 <- brm(
+  formula = form_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_sp,
+  data = df_sim_2,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(
+  #   adapt_delta = 0.99,
+  #   max_treedepth = 15
+  # ),
+  # sample_prior = "only"
+  # sample_prior = TRUE
+)
+```
+
+#### Prior Checks
+
+```{r}
+test_data_2 <- (
+  expand.grid(
+    clim = seq(
+      min(df_sim_2$clim),
+      max(df_sim_2$clim),
+      length.out = 20
+    ),
+    adm_code = unique(df_sim_2$adm_code)
+  )
+)
+```
+
+```{r}
+prior_epred_2 <- (
+  test_data_2
+  %>% add_epred_draws(
+    fit_sp_2,
+    ndraws = 20,
+    re_formula = NULL
+  )
+)
+```
+
+```{r}
+(
+  prior_epred_2
+  %>% ggplot(
+    aes(
+      x = .epred,
+      height = after_stat("density")
+    )
+  )
+  + geom_density()
+)
+```
+
+#### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_sp_2$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+mcmc_trace(as_draws_df(fit_sp_2), pars = c("rhocar", "sdcar", "rcar[1]"))
+```
+
+
+
+```{r}
+fit_sp_2
+```
+
+# Spatial correlation through common confounder
+
+## Simulation
+
+```{r}
+set.seed(seed)
+
+# Parameters
+n_loc <- nrow(W)
+n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
+adm_code <- rep(1:n_loc, each = n_ind) # we create a vector of admin areas representing the location of the individual responders 
+
+beta_uc <- 0.4    # effect of the unobserved variable on climate
+clim_noise_sd <- 0.7
+
+alpha_sv <- -1    # sexual violence intercept
+beta_us <- 2      # effect of the unobserved variable on sexual violence
+
+# CAR precision matrix
+D <- diag(rowSums(W))
+rho_true <- 0.85
+sigma2_u <- 1.0
+Q <- D - rho_true * W
+
+# Unobserved confounder (there is just one of this that applies to all the individual data)
+Sigma_u <- sigma2_u * solve(Q)
+u_adm <- MASS::mvrnorm(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
+
+# Climate variable dependent on confounder (here we also assume that this is the same for all people in the same area)
+clim_adm <- matrix(beta_uc * u_adm + rnorm(n_loc, 0, clim_noise_sd), nrow = 1)
+rownames(clim_adm) <- "clim"
+
+# Individual level data
+u <- u_adm[adm_code]
+clim <- clim_adm[adm_code]
+
+# Sexual violence data
+logit_p_sv <- alpha_sv + beta_us * u # Sexual violence only depends on the unobserved variable
+sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
+
+df_sim_3 <- (
+  tibble(
+    adm_code = factor(as.character(adm_code)),
+    clim = clim,
+    u = u,
+    sv = sv
+  )
+  %>% arrange(adm_code)
+)
+
+sf_clim_3 <- bind_cols(sf_data, t(clim_adm))
+```
+
+
+```{r}
+(
+  ggplot(data = sf_clim_3)
+  + geom_sf(
+    aes(fill = clim),
+    color = "black",
+    linewidth = 0.1
+  )
+  + scale_fill_viridis_c()
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.background = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  )
+  + labs(
+    fill = "Climate Variable"
+  )
+)
+```
+
+
+## Modeling
+
+### No Spatial Autocorrelation
+
+```{r}
+fit_ns_3 <- brm(
+  formula = form_ns,
+  family = bernoulli("logit"),
+  prior = prior_list_ns,
+  data = df_sim_3,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+fit_ns_3
+```
+
+### With admin level random effects
+
+```{r}
+fit_adm_3 <- brm(
+  formula = form_adm,
+  family = bernoulli("logit"),
+  prior = prior_list_adm,
+  data = df_sim_3,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+fit_adm_3
+```
+
+### With confounder
+
+```{r}
+fit_with_u_3 <- brm(
+  formula = form_with_u,
+  family = bernoulli("logit"),
+  prior = prior_list_with_u,
+  data = df_sim_3,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+fit_with_u_3
+```
+
+
+### With only spatial autocorrelation
+
+```{r}
+fit_only_sp_3 <- brm(
+  formula = form_only_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_only_sp,
+  data = df_sim_3,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta)
+)
+```
+
+```{r}
+fit_only_sp_3
+```
+
+
+### With with Climate and Spatial Autocorrelation
+
+```{r}
+fit_sp_3 <- brm(
+  formula = form_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_sp,
+  data = df_sim_3,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta)
+)
+```
+
+#### Prior Checks
+
+```{r}
+test_data <- (
+  expand.grid(
+    clim = seq(
+      min(df_sim_3$clim),
+      max(df_sim_3$clim),
+      length.out = 20
+    ),
+    adm_code = unique(df_sim_3$adm_code)
+  )
+)
+```
+
+```{r}
+prior_epred_3 <- (
+  test_data
+  %>% add_epred_draws(
+    fit_sp_3,
+    ndraws = 20,
+    re_formula = NULL
+  )
+)
+```
+
+```{r}
+(
+  prior_epred_3
+  %>% ggplot(
+    aes(
+      x = .epred,
+      height = after_stat("density")
+    )
+  )
+  + geom_density()
+)
+```
+
+#### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_sp_3$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+mcmc_trace(as_draws_df(fit_sp_3), pars = c("rhocar", "sdcar", "rcar[1]"))
+```
+
+
+
+```{r}
+fit_sp_3
+```
+
+# Separate spatially correlated climate and violence
+
+## Simulation
+
+```{r}
+# Parameters
+# 
+# seed <- sample.int(1E7, size = 1)
+set.seed(seed)
+
+n_loc <- nrow(W)
+n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
+adm_code <- rep(1:n_loc, each = n_ind)
+
+# CAR precision matrix
+D <- diag(rowSums(W))
+rho_true <- 0.85
+sigma2 <- 1.0
+Q <- D - rho_true * W  
+Sigma <- sigma2 * solve(Q)
+
+# Climate variable
+clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+rownames(clim_adm) <- "clim"
+
+# Sexual violence risk factor
+logit_p_sv_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+
+# Individual level data
+clim <- clim_adm[adm_code]
+logit_p_sv <- logit_p_sv_adm[adm_code]
+
+# Generate sexual violence data
+sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
+
+df_sim_4 <- (
+  tibble(
+    adm_code = factor(as.character(adm_code)),
+    clim = clim,
+    sv = sv
+  )
+  %>% arrange(adm_code)
+)
+
+sf_clim_4 <- bind_cols(sf_data, t(clim_adm))
+```
+
+
+```{r}
+(
+  ggplot(data = sf_clim_4)
+  + geom_sf(
+    aes(fill = clim),
+    color = "black",
+    linewidth = 0.1
+  )
+  + scale_fill_viridis_c()
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.background = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  )
+  + labs(
+    fill = "Climate Variable"
+  )
+)
+```
+
+
+## Modeling
+
+### No Spatial Autocorrelation
+
+```{r}
+fit_ns_4 <- brm(
+  formula = form_ns,
+  family = bernoulli("logit"),
+  prior = prior_list_ns,
+  data = df_sim_4,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+fit_ns_4
+```
+
+### With admin level random effects
+
+```{r}
+fit_adm_4 <- brm(
+  formula = form_adm,
+  family = bernoulli("logit"),
+  prior = prior_list_adm,
+  data = df_sim_4,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000
+)
+```
+
+```{r}
+fit_adm_4
+```
+
+### With only spatial autocorrelation
+
+```{r}
+fit_only_sp_4 <- brm(
+  formula = form_only_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_only_sp,
+  data = df_sim_4,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta)
+)
+```
+
+```{r}
+fit_only_sp_4
+```
+
+### With with Climate and Spatial Autocorrelation
+
+```{r}
+fit_sp_4 <- brm(
+  formula = form_sp,
+  family = bernoulli("logit"),
+  prior = prior_list_sp,
+  data = df_sim_4,
+  data2 = list(W = W),
+  seed = seed,
+  refresh = 1000,
+  # control = list(adapt_delta = adapt_delta)
+)
+```
+
+#### Prior Checks
+
+```{r}
+test_data <- (
+  expand.grid(
+    clim = seq(
+      min(df_sim_4$clim),
+      max(df_sim_4$clim),
+      length.out = 20
+    ),
+    adm_code = unique(df_sim_4$adm_code)
+  )
+)
+```
+
+```{r}
+prior_epred_4 <- (
+  test_data
+  %>% add_epred_draws(
+    fit_sp_4,
+    ndraws = 20,
+    re_formula = NULL
+  )
+)
+```
+
+```{r}
+(
+  prior_epred_4
+  %>% ggplot(
+    aes(
+      x = .epred,
+      height = after_stat("density")
+    )
+  )
+  + geom_density()
+)
+```
+
+#### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_sp_4$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+mcmc_trace(as_draws_df(fit_sp_4), pars = c("rhocar", "sdcar", "rcar[1]"))
+```
+
+
+
+```{r}
+fit_sp_4
+```
+
+

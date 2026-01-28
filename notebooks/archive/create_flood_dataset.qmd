@@ -1,0 +1,240 @@
+---
+title: "Create Flood Dataset from Sentinel-1"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(patchwork)
+library(paletteer)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+flood_data_dir <- "/Users/paoich/Library/CloudStorage/GoogleDrive-andrichpaolo@gmail.com/My Drive/flood_files"
+proc_data_dir <- root("data/processed/flood")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+
+# Settings
+nb_name <-  "Create Floods Dataset"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+# Functions
+
+```{r}
+combine_rast_files <- function(file_list) {
+  rast_list <- list()
+  time_list <- list()
+  for (i in seq_along(flood_file_list)) {
+    rast <- terra::rast(flood_file_list[[i]])
+    date_raw <- gsub("\\D", "", terra::varnames(rast))
+    date <- as.Date(date_raw, format = "%Y%m%d")
+    terra::time(rast) <- date
+    rast_list[[i]] <- rast
+    time_list[[i]] <- date
+  }
+  groups <- lapply(unique(time_list), function(t) rast_list[time_list == t])
+  mosaics <- lapply(
+    groups,
+    function(rlist) {
+      do.call(terra::mosaic, rlist)
+    }
+  )
+  rast_final <- terra::rast(mosaics)
+  rast_final
+}
+```
+
+
+# Load Data
+
+## Geometries
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    )
+  )
+  %>% select(
+    district_code = objectid,
+    district
+  )
+  %>% st_transform(4326)
+)
+```
+
+
+```{r}
+flood_file_list <- sort(
+  list.files(
+    path = file.path(raw_data_dir, "flood"),
+    pattern = ".tif",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+)
+```
+
+```{r}
+rast_test <- (
+  terra::rast(flood_file_list[[1]])
+)
+```
+
+
+```{r}
+rast_flood <- (
+  combine_rast_files(flood_file_list)
+  %>% terra::project(st_crs(sf_uga)$wkt)
+)
+```
+
+
+
+
+```{r}
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_test[["current"]],
+    mapping = aes(fill = current)
+  )
+  # + scale_fill_paletteer_c(
+  #   "scico::vik",
+  #   na.value = "transparent",
+  # )
+  + geom_sf(
+    data = sf_uga,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = c(32.1, 33.8),
+    ylim = c(0.1, 0.5)
+  )
+  + labs(
+    fill = "Flood"
+  )
+)
+```
+
+
+# Process Data
+
+```{r}
+df_flood <- (
+  bind_rows(dfs_flood_list)
+  %>% filter(
+    coverage_pct > 0
+  )
+  %>% mutate(
+    district = case_match(
+      district,
+      "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    ),
+    date = as.Date(acq_time, format = "%Y-%m-%d"),
+    district_area_km2 = district_area_m2 / 1e6,
+    flooded_area_km2 = flooded_m2 / 1e6,
+    coverage_frac = coverage_pct / 100
+  )
+  %>% select(
+    date,
+    district,
+    district_area_km2,
+    coverage_frac, 
+    flooded_area_km2,
+    flooded_frac = flood_fraction
+  )
+)
+```
+
+```{r}
+df_flood_distr_day <- (
+  df_flood
+  %>% arrange(district, date, desc(coverage_frac))
+  %>% group_by(district, date)
+  %>% slice_head(n = 1)
+  %>% ungroup()
+  %>% filter(
+    coverage_frac > 0.7
+  )
+  %>% mutate(
+    flooded_area_km2 = flooded_area_km2 / coverage_frac,
+    flooded_frac = flooded_frac / coverage_frac
+  )
+  # %>% summarise(
+  #   coverage_frac_sum = sum(coverage_frac, na.rm = TRUE),
+  #   flooded_frac_weighted = sum(flooded_frac * coverage_frac, na.rm = TRUE) / coverage_frac_sum,
+  #   .groups = "drop"
+  # )
+  # %>% filter(
+  #   coverage_frac_sum > 0.7
+  # )
+)
+```
+
+# Viz
+
+```{r}
+(
+  df_flood_distr_day
+  %>% ggplot()
+  + geom_boxplot(
+    aes(x = district, y = coverage_frac)
+  )
+)
+```
+
+
+# Save
+
+```{r}
+df_flood_distr_day %>% write_csv(file.path(proc_data_dir, "uganda_flood_timeseries.csv"))
+```

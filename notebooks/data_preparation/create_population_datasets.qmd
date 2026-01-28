@@ -39,10 +39,6 @@ sf_moz <- (
     adm_name = dhsregen,
     adm_code = regcode
   )
-  %>% mutate(
-    country = "Mozambique",
-    adm_area = unclass(st_area(geometry)) / 1E6, #km^2
-  )
   %>% arrange(adm_code)
 )
 ```
@@ -59,10 +55,6 @@ sf_zwe <- (
     country = cntrynamee,
     adm_name = dhsregen,
     adm_code = regcode
-  )
-  %>% mutate(
-    country = "Zimbabwe",
-    adm_area = unclass(st_area(geometry)) / 1E6, #km^2
   )
   %>% arrange(adm_code)
 )
@@ -81,10 +73,6 @@ sf_lso <- (
     adm_name = dhsregen,
     adm_code = regcode
   )
-  %>% mutate(
-    country = "Lesotho",
-    adm_area = unclass(st_area(st_make_valid(geometry))) / 1E6, #km^2
-  )
   %>% arrange(adm_code)
 )
 ```
@@ -101,10 +89,6 @@ sf_nam <- (
     country = cntrynamee,
     adm_name = dhsregen,
     adm_code = regcode
-  )
-  %>% mutate(
-    country = "Namibia",
-    adm_area = unclass(st_area(geometry)) / 1E6, #km^2
   )
   %>% arrange(adm_code)
 )
@@ -123,10 +107,6 @@ sf_zmb <- (
     adm_name = dhsregen,
     adm_code = regcode
   )
-  %>% mutate(
-    country = "Zambia",
-    adm_area = unclass(st_area(st_make_valid(geometry))) / 1E6, #km^2
-  )
   %>% arrange(adm_code)
 )
 ```
@@ -134,26 +114,6 @@ sf_zmb <- (
 ### Uganda
 
 ```{r}
-# sf_uga <- (
-#   st_read(
-#     file.path(raw_data_dir, "geographies", "uga_admbnda_ubos_20200824.gdb", fsep = "/"),
-#     layer = "uga_admbnda_adm2_ubos_20200824"
-#   )
-#   %>% rename_with(tolower)
-#   %>% mutate(
-#     id = row_number()
-#   )
-#   %>% select(
-#     id,
-#     adm_name = admin1name_en,
-#     adm_name = admin2name_en,
-#     adm2_pcode = admin2pcode,
-#     # adm3_name = admin3name_en,
-#     # adm4_name = admin4name_en,
-#     # adm4_pcode = admin4pcode,
-#     geometry = shape
-#   )
-# )
 sf_uga <- (
   st_read(
     file.path(
@@ -169,6 +129,9 @@ sf_uga <- (
     district = case_match(
       district,
       "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
       .default = str_to_title(district)
     )
   )
@@ -176,9 +139,6 @@ sf_uga <- (
     country,
     adm_code = objectid,
     adm_name = district
-  )
-  %>% mutate(
-    adm_area = unclass(st_area(geometry)) / 1E6, #km^2
   )
   %>% st_transform(4326)
 )
@@ -197,10 +157,6 @@ sf_ken <- (
     adm_name = dhsregen,
     adm_code = regcode
   )
-  %>% mutate(
-    country = "Kenya",
-    adm_area = unclass(st_area(st_make_valid(geometry))) / 1E6, #km^2
-  )
   %>% arrange(adm_code)
 )
 ```
@@ -210,31 +166,27 @@ sf_ken <- (
 ### Mozambique
 
 ```{r}
-rast_pop_moz_2022 <- (
+rast_pop_moz <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "moz_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "moz_pop_2019_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2019_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_moz_2022 <- (
-  rast_pop_moz_2022
+adm_pop_moz <- (
+  rast_pop_moz
   %>% exactextractr::exact_extract(
     sf_moz,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -242,31 +194,27 @@ adm_pop_moz_2022 <- (
 ### Zimbabwe
 
 ```{r}
-rast_pop_zwe_2022 <- (
+rast_pop_zwe <- (
   terra::rast(  
-    file.path(raw_data_dir, "population", "zwe_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "zwe_pop_2017_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2017_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_zwe_2022 <- (
-  rast_pop_zwe_2022
+adm_pop_zwe <- (
+  rast_pop_zwe
   %>% exactextractr::exact_extract(
     sf_zwe,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -274,31 +222,27 @@ adm_pop_zwe_2022 <- (
 ### Lesotho
 
 ```{r}
-rast_pop_lso_2022 <- (
+rast_pop_lso <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "lso_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "lso_pop_2018_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2018_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_lso_2022 <- (
-  rast_pop_lso_2022
+adm_pop_lso <- (
+  rast_pop_lso
   %>% exactextractr::exact_extract(
     sf_lso,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -306,31 +250,27 @@ adm_pop_lso_2022 <- (
 ### Namibia
 
 ```{r}
-rast_pop_nam_2022 <- (
+rast_pop_nam <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "nam_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "nam_pop_2019_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2019_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_nam_2022 <- (
-  rast_pop_nam_2022
+adm_pop_nam <- (
+  rast_pop_nam
   %>% exactextractr::exact_extract(
     sf_nam,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -338,31 +278,27 @@ adm_pop_nam_2022 <- (
 ### Zambia
 
 ```{r}
-rast_pop_zmb_2022 <- (
+rast_pop_zmb <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "zmb_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "zmb_pop_2015_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2015_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_zmb_2022 <- (
-  rast_pop_zmb_2022
+adm_pop_zmb <- (
+  rast_pop_zmb
   %>% exactextractr::exact_extract(
     sf_zmb,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -370,31 +306,27 @@ adm_pop_zmb_2022 <- (
 ### Uganda
 
 ```{r}
-rast_pop_uga_2022 <- (
+rast_pop_uga <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "uga_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "uga_pop_2024_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2024_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_uga_2022 <- (
-  rast_pop_uga_2022
+adm_pop_uga <- (
+  rast_pop_uga
   %>% exactextractr::exact_extract(
     sf_uga,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -402,31 +334,27 @@ adm_pop_uga_2022 <- (
 ### Kenya
 
 ```{r}
-rast_pop_ken_2022 <- (
+rast_pop_ken <- (
   terra::rast(
-    file.path(raw_data_dir, "population", "ken_pop_2022_CN_1km_R2025A_UA_v1.tif")
+    file.path(raw_data_dir, "population", "ken_pop_2018_CN_1km_R2025A_UA_v1.tif")
   )
   %>% rename(
-    pop = global_pop_2022_CN_1km_R2025A_v1
+    pop = global_pop_2018_CN_1km_R2025A_v1
   )
 )
 ```
 
 ```{r}
-adm_pop_ken_2022 <- (
-  rast_pop_ken_2022
+adm_pop_ken <- (
+  rast_pop_ken
   %>% exactextractr::exact_extract(
     sf_ken,
     fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
     max_cells_in_memory = 176067000,
-    append_cols = c("country", "adm_code", "adm_name", "adm_area")
+    append_cols = c("country", "adm_code", "adm_name")
   )
   %>% rename(
     pop = result
-  )
-  %>% mutate(
-    pop_density = pop / adm_area,
-    log_pop_density = log10(pop_density)
   )
 )
 ```
@@ -436,13 +364,13 @@ adm_pop_ken_2022 <- (
 ```{r}
 adm_pop <- (
   bind_rows(
-    adm_pop_moz_2022,
-    adm_pop_zwe_2022,
-    adm_pop_lso_2022,
-    adm_pop_nam_2022,
-    adm_pop_zmb_2022,
-    adm_pop_uga_2022,
-    adm_pop_ken_2022
+    adm_pop_moz,
+    adm_pop_zwe,
+    adm_pop_lso,
+    adm_pop_nam,
+    adm_pop_zmb,
+    adm_pop_uga,
+    adm_pop_ken
   )
 )
 ```
@@ -452,4 +380,3 @@ adm_pop <- (
 ```{r}
 adm_pop %>% write_csv(file.path(proc_data_dir, "adm_pop_all_countries.csv"))
 ```
-

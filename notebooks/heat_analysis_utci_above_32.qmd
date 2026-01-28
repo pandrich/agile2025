@@ -10,6 +10,7 @@ editor: visual
 # Packages
 library(tidyverse)
 library(sf)
+library(spdep)
 library(brms)
 options(brms.backend = "cmdstanr", mc.cores = 4)
 library(cmdstanr)
@@ -45,6 +46,7 @@ label_map <- c(
   in_school = "In school",
   work = "Has worked",
   rural = "Rural area",
+  age = "Age",
   log_pop_density = "Population density",
   clim = "Climate factor",
   food_stress_12m = "Food Price Stress"
@@ -52,13 +54,15 @@ label_map <- c(
 
 # Var settings
 # clim_var <- "dev_value_utci_days_above_32_daily_max_sum_12m"
-clim_var <- "dev_value_weighted_utci_max_above_32_12m"
+clim_var <- "dev_value_girl_weighted_utci_max_above_32_12m"
 covars_fem <- c(
   "country",
   "cluster",
-  # "adm1_name",
-  # "rural",
+  "adm_name",
+  "rural",
+  "age",
   "log_pop_density",
+  "food_stress_12m",
   "work",
   "live_with_partner",
   "tolerate_women_violence",
@@ -69,8 +73,10 @@ vars_fem <- c(covars_fem, "clim")
 covars_ch <- c(
   "country",
   "cluster",
-  # "adm1_name",
-  # "rural",
+  "adm_name",
+  "rural",
+  "age",
+  "food_stress_12m",
   "log_pop_density",
   "in_school",
   # "live_with_partner",
@@ -85,18 +91,21 @@ bin_cov_fem <- c(
   "rural",
   "work", 
   # "in_school",
-  "live_with_partner", 
-  "tolerate_women_violence"
+  "food_stress_12m",
+  "live_with_partner" 
+  # "tolerate_women_violence"
 )
 bin_cov_ch <- c(
   "rural",
   "in_school", 
+  "food_stress_12m",
   # "live_with_partner",
-  "live_with_father", 
-  "tolerate_women_violence"
+  "live_with_father" 
+  # "tolerate_women_violence"
 )
 cont_covs <- c(
   "log_pop_density",
+  "age",
   "clim"
 )
 ```
@@ -360,8 +369,9 @@ plot_bin_marginal <- function(ppc, ppc_stats, lims = NULL) {
 
 plot_continuous_marginal <- function(df_summary, covar_label = NULL, lims = NULL) {
   (
-    ggplot(
-      df_summary %>% filter(covariate == covar_label), 
+    df_summary 
+    %>% filter(covariate == covar_label)
+    %>% ggplot(
       aes(
         x = covariate_value, 
         y = median, 
@@ -407,6 +417,8 @@ plot_continuous_marginal <- function(df_summary, covar_label = NULL, lims = NULL
 
 # Import Data
 
+## Climate & Violence
+
 ```{r}
 df_clim_viol <- (
   read_csv(
@@ -427,16 +439,131 @@ df_clim_viol <- (
 )
 ```
 
+## Geometries
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb
+  )
+  %>% filter(
+    adm_name %in% (df_clim_viol$adm_name %>% unique())
+  )
+)
+```
+
 # Prepare Data
+
+## Extract model subsets
 
 ```{r}
 df_model_fem <- (
   df_clim_viol
   %>% filter(
     female == 1,
+    age >= 19
   )
   %>% select(all_of(vars_fem))
   %>% na.omit()
+  %>% mutate(
+    adm_name = factor(adm_name)
+  )
 )
 
 df_model_ch <- (
@@ -447,7 +574,23 @@ df_model_ch <- (
   )
   %>% select(all_of(vars_ch))
   %>% na.omit()
+  %>% mutate(
+    adm_name = factor(adm_name)
+  )
 )
+```
+
+## Generate adjacency matrix
+
+```{r}
+nb_list <- poly2nb(sf_all)
+W <- nb2mat(nb_list, style = "B", zero.policy = TRUE)
+rownames(W) <- sf_all$adm_name
+colnames(W) <- sf_all$adm_name
+levs_fem <- levels(df_model_fem$adm_name)
+levs_ch <- levels(df_model_ch$adm_name)
+W_fem <- W[levs_fem, levs_fem]
+W_ch <- W[levs_ch, levs_ch]
 ```
 
 # Modeling
@@ -457,16 +600,27 @@ df_model_ch <- (
 ### Any violence
 
 ```{r}
+x <- seq(-5, 5, length.out = 100)
+st_t <- dstudent_t(x, df = 3, mu = -1.5, sigma = 0.5) 
+```
+
+```{r}
 form_fem_all_viol <- bf(
   sv ~ (
     1 
+    + age
     + work
     + live_with_partner
-    + tolerate_women_violence
-    # + rural
-    + log_pop_density
+    # + tolerate_women_violence
+    + rural
+    + food_stress_12m
+    # + log_pop_density
     + clim
-    + (1 | country/cluster)
+    # + (-1 + clim | food_stress_12m)
+    # + (1 | country/cluster)
+    # + (1 | country/adm_name)
+    + (1 | country)
+    + car(W, gr = adm_name, type = "escar")
     # + (1 + clim | country/cluster)
     # + (1 + clim || country/adm1_name)
   )
@@ -475,11 +629,14 @@ fit_fem_all_viol <- brm(
   formula = form_fem_all_viol,
   family = bernoulli("logit"),
   prior = c(
-    prior(normal(-1, 1), class = "Intercept"),
-    prior(normal(0, 0.5), class = "b"),
-    prior(normal(0, 0.5), class = "sd")
+    prior(student_t(3, -2, 0.4), class = "Intercept"),
+    prior(normal(0, 0.1), class = "b"),
+    prior(exponential(1/0.3), class = "sd"),
+    prior(normal(0, 0.1), class = "car"),
+    prior(exponential(1/0.3), class = "sdcar")
   ),
   data = df_model_fem,
+  data2 = list(W = W_fem),
   seed = seed,
   # algorithm = "meanfield",
   refresh = 1000,
@@ -492,30 +649,49 @@ fit_fem_all_viol <- brm(
 Build test data
 
 ```{r}
-test_data <- expand.grid(
-  rural = unique(df_model_fem$rural),
-  work = unique(df_model_fem$rural),
-  live_with_partner = unique(df_model_fem$live_with_partner),
-  tolerate_women_violence = unique(df_model_fem$tolerate_women_violence),
-  clim = seq(
-    min(df_model_fem$clim),
-    max(df_model_fem$clim),
-    length.out = 20
+test_data <- (
+  expand.grid(
+    rural = unique(df_model_fem$rural),
+    work = unique(df_model_fem$rural),
+    live_with_partner = unique(df_model_fem$live_with_partner),
+    food_stress_12m = unique(df_model_fem$food_stress_12m),
+    # tolerate_women_violence = unique(df_model_fem$tolerate_women_violence),
+    # log_pop_density = seq(
+    #   min(df_model_fem$log_pop_density),
+    #   max(df_model_fem$log_pop_density),
+    #   length.out = 20
+    # ),
+    age = seq(
+      min(df_model_fem$age),
+      max(df_model_fem$age),
+      length.out = 10
+    ),
+    clim = seq(
+      min(df_model_fem$clim),
+      max(df_model_fem$clim),
+      length.out = 10
+    ),
+    adm_name = unique(df_model_fem$adm_name)
+  )
+  %>% mutate(
+    adm_name = fct_relevel(
+      factor(adm_name),
+      levels(df_model_fem$adm_name)
+    )
   )
 )
 ```
-
 
 ```{r}
 prior_epred_fem_all_viol <- (
-  fit_fem_all_viol
-  %>% epred_draws(
-    newdata = test_data,
-    re_formula = ~0
+  test_data
+  %>% add_epred_draws(
+    fit_fem_all_viol,
+    ndraws = 20,
+    re_formula = NA
   )
 )
 ```
-
 
 ```{r}
 (
@@ -534,6 +710,43 @@ prior_epred_fem_all_viol <- (
 
 ```{r}
 fit_fem_all_viol
+```
+
+```{r}
+bayesplot::mcmc_trace(
+  as.array(fit_fem_all_viol), 
+  pars = c("b_Intercept", "sd_country__Intercept", "rcar[1]"), 
+)
+```
+
+```{r}
+bayesplot::mcmc_pairs(
+  as.array(fit_fem_all_viol), 
+  pars = c("b_Intercept", "sd_country__Intercept", "rcar[1]"),
+  np = nuts_params(fit_fem_all_viol),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+```{r}
+mcmc_parcoord(
+  as.array(fit_fem_all_viol), 
+  pars = c("b_Intercept", "sd_country__Intercept", "car", "sdcar", "rcar[1]"),
+  np = nuts_params(fit_fem_all_viol),
+  np_style = parcoord_style_np(
+    div_color = "green",
+    div_alpha = 0.6,
+    div_size = 1.1
+  )
+)
+```
+
+```{r}
+variables(fit_fem_all_viol)
 ```
 
 ###### Baseline Levels
@@ -574,7 +787,7 @@ inter_fem_all_viol <- (
     trim = TRUE
   )
   + scale_x_continuous(
-    limits = c(0.018, 0.18),
+    # limits = c(0.018, 0.18),
     labels = scales::percent
   )
   + labs(
@@ -613,14 +826,14 @@ ranef_fem_all_viol_names <- names(ranefs_fem_all_viol)
 
 ```{r}
 df_ranefs_country_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country"]], group_name = "country")
-df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:cluster"]], group_name = "cluster")
+# df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:cluster"]], group_name = "cluster")
 # df_ranefs_cluster_fem_all_viol <- create_ranef_df(ranefs_fem_all_viol[["country:adm1_name"]], group_name = "adm1_name")
-df_ranefs_groups_fem_all_viol <- bind_rows(df_ranefs_country_fem_all_viol, df_ranefs_cluster_fem_all_viol)
+# df_ranefs_groups_fem_all_viol <- bind_rows(df_ranefs_country_fem_all_viol, df_ranefs_cluster_fem_all_viol)
 ```
 
 ```{r}
 df_ranef_fem_all_viol_summary <- (
-  df_ranefs_groups_fem_all_viol
+  df_ranefs_country_fem_all_viol
   %>% group_by(group, level, term) 
   %>% summarise(
     median = median(value),
@@ -721,11 +934,11 @@ df_marg_cont_fem_all_viol <- generate_marginal_df(fit_fem_all_viol, df_model_fem
 ```{r}
 #| fig-width: 4.5
 #| fig-height: 3
-plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Population density", lims = c(0.01, 0.20))
+plot_continuous_marginal(df_marg_cont_fem_all_viol, covar_label = "Age", lims = c(0.03, 0.30))
 
 ggsave(
   path = fig_dir,
-  filename = "marginal_predicted_prob_log_density_ur_fem_all_viol.png"
+  filename = "marginal_predicted_prob_age_ur_fem_all_viol.png"
 )
 ```
 
@@ -746,15 +959,16 @@ ggsave(
 form_fem_np_viol <- bf(
   sv_np ~ (
     1 
-    + work
+    # + work
     + live_with_partner
     + tolerate_women_violence
-    # + rural
-    + log_pop_density
+    + rural
+    # + log_pop_density
     + clim
+    + (1 + clim | country)
     # + (1 + clim | country/rural/cluster)
-    + (1 + clim | country/cluster)
-    # + (1 + clim | country/adm1_name)
+    # + (1 + clim | country/cluster)
+    # + (1 + clim | country/adm_name)
   )
 )
 fit_fem_np_viol <- brm(

@@ -1,0 +1,133 @@
+
+---
+title: "Uganda Flood Fraction by Sentinel-1 (per-image, per-district)"
+format: html
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+# Install packages if needed:
+# install.packages(c("sf","dplyr","readr"))
+# remotes::install_github("r-spatial/sf")
+# install.packages("remotes")
+# remotes::install_github("r-spatial/rgee")
+library(rgee)
+library(sf)
+library(dplyr)
+library(readr)
+
+ee_Initialize()
+```
+
+## Parameters
+
+```{r params}
+DISTRICT_SHP <- "uganda_admin2.shp"
+START <- "2020-01-01"
+END <- "2025-08-31"
+BASELINE_START <- "2017-01-01"
+BASELINE_END <- "2019-12-31"
+ANOMALY_THRESHOLD <- -3.0
+PERM_WATER_OCCURRENCE_PCT <- 50
+S1_COLLECTION_ID <- "COPERNICUS/S1_GRD"
+OUTPUT_CSV <- "uganda_flood_by_image_district_r.csv"
+SCALE <- 10
+```
+
+## Load districts
+
+```{r load}
+districts_sf <- sf::st_read(DISTRICT_SHP) %>% st_transform(4326)
+districts_sf$area_m2 <- as.numeric(st_area(st_transform(districts_sf,3857)))
+# convert to ee FeatureCollection
+districts_fc <- sf_as_ee(districts_sf)
+```
+
+## List Sentinel-1 images
+
+```{r list}
+s1_col <- ee$ImageCollection(S1_COLLECTION_ID)$
+  filterDate(START, END)$
+  filter(ee$Filter$eq('instrumentMode','IW'))$
+  filter(ee$Filter$listContains('transmitterReceiverPolarisation','VV'))$
+  filterBounds(districts_fc$geometry())
+
+info <- s1_col$reduceColumns(ee$Reducer$toList(2), list('system:index','system:time_start'))$getInfo()
+ids <- info$list[[1]]
+times <- info$list[[2]]
+length(ids)
+```
+
+## Process images (per-image per-district)
+
+```{r process}
+library(lubridate)
+
+if(!file.exists(OUTPUT_CSV)){
+  write_csv(tibble(image_id=character(), acq_datetime=character(), district_name=character(), flooded_m2=numeric(), district_area_m2=numeric(), flood_fraction=numeric(), coverage_pct=numeric(), baseline_exists=logical()), OUTPUT_CSV)
+}
+
+for(i in seq_along(ids)){
+  iid <- ids[[i]]
+  t <- times[[i]]
+  acq_time <- as_datetime(as.numeric(t)/1000, tz='UTC')
+  acq_str <- format(acq_time, "%Y-%m-%dT%H:%M:%SZ")
+  message("Processing ", iid, " ", acq_str)
+  img <- ee$Image(paste0("COPERNICUS/S1_GRD/", iid))$select('VV')
+  month <- as.integer(format(acq_time, "%m"))
+
+  per_feature <- function(feature){
+    geom <- feature$geometry()
+    baseline_col <- ee$ImageCollection(S1_COLLECTION_ID)$
+      filterDate(BASELINE_START, BASELINE_END)$
+      filter(ee$Filter$eq('instrumentMode','IW'))$
+      filter(ee$Filter$listContains('transmitterReceiverPolarisation','VV'))$
+      filterBounds(geom)$
+      filter(ee$Filter$calendarRange(month, month, 'month'))$
+      select('VV')
+
+    baseline_exists <- baseline_col$size()$gt(0)
+    baseline <- baseline_col$median()$clip(geom)
+
+    img_clip <- img$clip(geom)
+    anomaly <- img_clip$subtract(baseline)
+    perm_water <- ee$Image('JRC/GSW1_3/GlobalSurfaceWater')$select('occurrence')$gte(PERM_WATER_OCCURRENCE_PCT)
+    flood_mask <- anomaly$lte(ANOMALY_THRESHOLD)$And(perm_water$Not())
+
+    flooded_area <- ee$Image$pixelArea()$updateMask(flood_mask)$reduceRegion(ee$Reducer$sum(), geom, SCALE, maxPixels=1e13)$get('area')
+    valid_area <- ee$Image$pixelArea()$updateMask(img_clip$mask())$reduceRegion(ee$Reducer$sum(), geom, SCALE, maxPixels=1e13)$get('area')
+    district_area <- ee$Number(feature$get('area_m2'))
+
+    flooded_num <- ee$Number(flooded_area)$unmask(0)
+    valid_num <- ee$Number(valid_area)$unmask(0)
+    coverage_pct <- ee$Algorithm$If(district_area$gt(0), valid_num$divide(district_area)$multiply(100), 0)
+    flood_fraction <- ee$Algorithm$If(district_area$gt(0), flooded_num$divide(district_area), 0)
+
+    feature$set(list(image_id=iid, acq_time=acq_str, flooded_m2=flooded_num, district_area_m2=district_area, flood_fraction=flood_fraction, coverage_pct=coverage_pct, baseline_exists=baseline_exists))
+  }
+
+  results_fc <- ee$FeatureCollection(districts_fc)$map(per_feature)
+  # fetch results (client)
+  feats <- results_fc$getInfo()$features
+  rows <- lapply(feats, function(f){
+    p <- f$properties
+    tibble::tibble(
+      image_id = p$image_id,
+      acq_datetime = p$acq_time,
+      district_name = p$district_name,
+      flooded_m2 = as.numeric(p$flooded_m2),
+      district_area_m2 = as.numeric(p$district_area_m2),
+      flood_fraction = as.numeric(p$flood_fraction),
+      coverage_pct = as.numeric(p$coverage_pct),
+      baseline_exists = as.logical(p$baseline_exists)
+    )
+  })
+  df <- dplyr::bind_rows(rows)
+  readr::write_csv(df, OUTPUT_CSV, append = TRUE)
+}
+```
+
+Save the R Quarto content to file.

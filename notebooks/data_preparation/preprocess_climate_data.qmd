@@ -20,6 +20,7 @@ proc_data_dir <- root("data/processed")
 fig_dir <- root("figures")
 dir.create(fig_dir, showWarnings = FALSE)
 mod_dir <- root("models")
+src_dir <- root("src")
 
 # Settings
 nb_name <-  "Process daily climate data"
@@ -30,182 +31,141 @@ set.seed(seed)
 # Functions
 
 ```{r}
-calculate_utci_12m_stats <- function(df_clim_daily, variable_name) {
-  df_clim_12m <- (
-    df_clim_daily
-    %>% group_by(country, adm_code, adm_name)
-    %>% mutate(
-      hist_mean = mean(clim, na.rm = TRUE),
-      hist_sd = sd(clim, na.rm = TRUE)
-    )
-    %>% ungroup()
-    %>% mutate(
-      sd_clim = (clim - hist_mean) / hist_sd,
-      above_1sd = if_else(sd_clim > 1, 1, 0),
-      above_32 = if_else(clim > 32, 1, 0)
-    )
-    %>% select(-c(hist_mean, hist_sd, sd_clim))
-    %>% arrange(country, adm_code, adm_name, date)
-    %>% group_by(country, adm_code, adm_name)
-    %>% mutate(
-      across(
-        -c(date, clim),
-        ~ zoo::rollsum((.), 365, fill = NA, align = "right"),
-        .names = "{.col}_12m"
-      ),
-      mean_12m = zoo::rollmean(clim, 365, fill = NA, align = "right"),
-      max_12m = zoo::rollmax(clim, 365, fill = NA, align = "right"),
-    )
-    %>% ungroup()
-    %>% select(country, adm_code, adm_name, date, contains("12m"))
-    %>% filter(!is.na(above_1sd_12m))
-    %>% pivot_longer(
-      cols = -c(country, adm_code, adm_name, date),
-      names_to = "variable",
-      values_to = "value"
-    ) 
-    %>% group_by(country, adm_code, adm_name, variable)
-    %>% mutate(
-      mean_value = mean(value, na.rm = TRUE),
-      sd_value = sd(value, na.rm = TRUE)
-    )
-    %>% ungroup()
-    %>% mutate(
-      dev_value = value - mean_value
-    )
-    %>% mutate(
-      variable = paste0(variable_name, "_", variable)
-    )
-    %>% filter(!is.na(value))
-    %>% pivot_wider(
-      id_cols = c(country, adm_code, adm_name, date),
-      names_from = "variable",
-      values_from = c(value, dev_value)
-    )
-  )
-  df_clim_12m
-}
-
-calculate_clim_12m_stats <- function(df_clim_daily, variable_name) {
-  df_clim_12m <- (
-    df_clim_daily
-    %>% group_by(country, adm_code, adm_name)
-    %>% mutate(
-      hist_mean = mean(clim, na.rm = TRUE),
-      hist_sd = sd(clim, na.rm = TRUE)
-    )
-    %>% ungroup()
-    %>% mutate(
-      sd_clim = (clim - hist_mean) / hist_sd,
-      above_1sd = if_else(sd_clim > 1, 1, 0),
-      above_32 = if_else(clim > 32, 1, 0)
-    )
-    %>% select(-c(hist_mean, hist_sd, sd_clim))
-    %>% arrange(country, adm_code, adm_name, date)
-    %>% group_by(country, adm_code, adm_name)
-    %>% mutate(
-      across(
-        -c(date, clim),
-        ~ zoo::rollsum((.), 365, fill = NA, align = "right"),
-        .names = "{.col}_12m"
-      ),
-      mean_12m = zoo::rollmean(clim, 365, fill = NA, align = "right"),
-      max_12m = zoo::rollmax(clim, 365, fill = NA, align = "right"),
-    )
-    %>% ungroup()
-    %>% select(country, adm_code, adm_name, date, contains("12m"))
-    %>% filter(!is.na(above_1sd_12m))
-    %>% pivot_longer(
-      cols = -c(country, adm_code, adm_name, date),
-      names_to = "variable",
-      values_to = "value"
-    ) 
-    %>% group_by(country, adm_code, adm_name, variable)
-    %>% mutate(
-      mean_value = mean(value, na.rm = TRUE),
-      sd_value = sd(value, na.rm = TRUE)
-    )
-    %>% ungroup()
-    %>% mutate(
-      dev_value = if_else(
-        sd_value == 0,
-        0,
-        (value - mean_value) / sd_value
-      )
-    )
-    %>% mutate(
-      variable = paste0(variable_name, "_", variable)
-    )
-    %>% filter(!is.na(value))
-    %>% pivot_wider(
-      id_cols = c(country, adm_code, adm_name, date),
-      names_from = "variable",
-      values_from = c(value, dev_value)
-    )
-  )
-  df_clim_12m
-}
+source(file.path(src_dir, "data_processing.R"))
 ```
 
 # Data Import
 
-## UTCI daily
+## UTCI
 
 There are 10 UTCI thermal stress categories that correspond to specific human physiological responses to the thermal environment. The categories relate to UTCI values as follows: above +46: extreme heat stress; +38 to +46: very strong heat stress; +32 to +38: strong heat stress; +26 to +32: moderate heat stress; +9 to +26: no thermal stress; +9 to 0: slight cold stress; 0 to -13: moderate cold stress; -13 to -27: strong cold stress; -27 to -40: very strong cold stress; below -40: extreme cold stress.
 
+### Raw UTCI
+
 ```{r}
-df_utci_daily <- (
+df_utci <- (
   read_csv(
     file.path(proc_data_dir, "UTCI", "utci_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
-  %>% rename(
-    clim = utci_max
-  )
 )
 ```
 
-## Population Weighted UTCI daily
+### Population Weighted UTCI daily
 
 ```{r}
-df_weighted_utci_daily <- (
+df_utci_pop_weighted <- (
   read_csv(
     file.path(proc_data_dir, "UTCI", "weighted_utci_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
-  %>% rename(
-    clim = utci_max
-  )
   %>% select(-pop)
 )
 ```
 
-## Temperature
+### Girl population weighted UTCI
 
 ```{r}
-df_temp_daily <- (
+df_utci_girl_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "UTCI",
+      "age_weighted_utci_max_daily_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% select(-popf_10_19)
+)
+```
+
+## Temperature (temp_2m_max)
+
+### Raw Temperature
+
+```{r}
+df_temp <- (
   read_csv(
     file.path(proc_data_dir, "temp_2m", "temp_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
-  %>% rename(
-    clim = temp_2m_max
-  )
 )
 ```
 
-## Population Weighted Temperature
+### Population Weighted Temperature
 
 ```{r}
-df_weighted_temp_daily <- (
+df_temp_pop_weighted <- (
   read_csv(
     file.path(proc_data_dir, "temp_2m", "weighted_temp_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
-  %>% rename(
-    clim = temp_2m_max
+  %>% select(-pop)
+)
+```
+
+### Girl population weighted Temperature
+
+```{r}
+df_temp_girl_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "temp_2m",
+      "age_weighted_temp_max_daily_all_countries.csv"
+    ),
+    show_col_types = FALSE
   )
   %>% select(-pop)
+)
+```
+
+## SPEI
+
+### Raw SPEI
+
+```{r}
+df_spei <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "SPEI",
+      "spei_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+)
+```
+
+### Population weighted SPEI
+
+```{r}
+df_spei_pop_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "SPEI",
+      "weighted_spei_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% select(-pop)
+)
+```
+
+### Girl population weighted UTCI
+
+```{r}
+df_spei_girl_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "SPEI",
+      "age_weighted_spei_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% select(-popf_10_19)
 )
 ```
 
@@ -213,34 +173,70 @@ df_weighted_temp_daily <- (
 
 ## UTCI
 
+### Raw UTCI
+
 ```{r}
-df_utci_12m <- calculate_utci_12m_stats(df_utci_daily, "utci_max")
+df_utci_12m <- calculate_utci_12m_stats(df_utci)
 ```
 
-## Population Weighted UTCI
+### Population Weighted UTCI
 
 ```{r}
-df_weighted_utci_12m <- calculate_utci_12m_stats(df_weighted_utci_daily, "weighted_utci_max")
+df_utci_pop_weighted_12m <- calculate_utci_12m_stats(df_utci_pop_weighted, weights = "pop_weighted")
+```
+
+### Girl Population Weighted UTCI
+
+```{r}
+df_utci_girl_weighted_12m <- calculate_utci_12m_stats(df_utci_girl_weighted, weights = "girl_weighted")
 ```
 
 ## Temperature
 
+### Raw Temperature
+
 ```{r}
-df_temp_12m <- calculate_clim_12m_stats(df_temp_daily, "temp_2m_max")
+df_temp_12m <- calculate_temp_12m_stats(df_temp)
 ```
 
 ```{r}
 colSums(is.na(df_temp_12m))
 ```
 
-## Population Weighted Temperature
+### Population Weighted Temperature
 
 ```{r}
-df_weighted_temp_12m <- calculate_clim_12m_stats(df_weighted_temp_daily, "weighted_temp_2m_max")
+df_temp_pop_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weights = "pop_weighted")
 ```
 
 ```{r}
 colSums(is.na(df_weighted_temp_12m))
+```
+
+### Girl Population Weighted Temperature
+
+```{r}
+df_temp_girl_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weights = "girl_weighted")
+```
+
+## SPEI
+
+### Raw SPEI
+
+```{r}
+df_spei_12m <- calculate_spei_12m_stats(df_spei)
+```
+
+### Population Weighted UTCI
+
+```{r}
+df_spei_pop_weighted_12m <- calculate_spei_12m_stats(df_spei_pop_weighted, weights = "pop_weighted")
+```
+
+### Girl Population Weighted UTCI
+
+```{r}
+df_spei_girl_weighted_12m <- calculate_spei_12m_stats(df_spei_girl_weighted, weights = "girl_weighted")
 ```
 
 # Combine climate variables
@@ -249,7 +245,12 @@ colSums(is.na(df_weighted_temp_12m))
 df_clim_12m <- ( 
   df_utci_12m
   %>% merge(
-    df_weighted_utci_12m,
+    df_utci_pop_weighted_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_utci_girl_weighted_12m,
     by = c("country", "adm_code", "adm_name", "date"),
     all.x = TRUE
   )
@@ -259,20 +260,34 @@ df_clim_12m <- (
     all.x = TRUE
   )
   %>% merge(
-    df_weighted_temp_12m,
+    df_temp_pop_weighted_12m,
     by = c("country", "adm_code", "adm_name", "date"),
     all.x = TRUE
   )
-  %>% mutate(
-    adm_name = case_when(
-      adm_name == "Harare Chitungwiza" ~ "Harare",
-      adm_name == "//Karas" ~ "!Karas",
-      .default = adm_name
-    ),
+  %>% merge(
+    df_spei_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
   )
+  %>% merge(
+    df_spei_pop_weighted_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_girl_weighted_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  # %>% mutate(
+  #   adm_name = case_when(
+  #     adm_name == "Harare Chitungwiza" ~ "Harare",
+  #     adm_name == "//Karas" ~ "!Karas",
+  #     .default = adm_name
+  #   ),
+  # )
 )
 ```
-
 
 # Visualizations
 
@@ -359,7 +374,7 @@ df_clim_12m <- (
 )
 ```
 
-###Weighted UTCI above 32
+### Weighted UTCI above 32
 
 ```{r}
 (
@@ -1458,5 +1473,5 @@ ggsave(
 # Save data
 
 ```{r}
-df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_daily.csv"))
+df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"))
 ```

@@ -23,7 +23,6 @@ root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 models_dir <- root("models")
 ```
 
-
 ```{r}
 simu <- stan(
   file.path(models_dir, "simu_test.stan"),
@@ -53,4 +52,3 @@ plot(data$X[,1], data$X[,2], pch=16, cex=1, col="black",
 ```{r}
 qbeta(p = c(0.025, 0.975), 100, 1900)
 ```
-
