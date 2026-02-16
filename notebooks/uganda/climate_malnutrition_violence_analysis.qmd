@@ -1,0 +1,1767 @@
+---
+title: "Climate, Malnutrition and Violence Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Analysis of the full dataset, Uganda"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+proc_data_dir <- root("data/processed/uganda")
+fig_dir <- root("figures")
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
+label_map <- c(
+  value_maln_cases_3m_per_1000 = "Maln., 3 months",
+  dev_value_maln_cases_3m_per_1000 = "Dev. Maln., 3 months",
+  value_num_rainfall_anomalies_6m_lag8 = "Rain, 6 months, lag 8",
+  value_num_rainfall_anomalies_3m_lag4 = "Rain, 3 months, lag 4",
+  value_num_spei_anomalies_6m = "SPEI, 6 months",
+  value_num_spei_anomalies_6m_lag11 = "SPEI, 6 months, lag 11",
+  value_num_spei_anomalies_6m_lag12 = "SPEI, 6 months, lag 12",
+  dev_value_num_spei_anomalies_6m_lag12 = "Dev. SPEI, 6 months, lag 12",
+  dev_value_num_spei_anomalies_3m_lag3 = "Dev. SPEI, 4 months, lag 3",
+  dev_value_num_spei_anomalies_12m_lag10 = "Dev. SPEI, 12 months, lag 10",
+  dev_value_num_spei_anomalies_6m_lag12 = "Dev. SPEI, 6 months, lag 12",
+  value_num_utci_anomalies_3m_lag4 = "UTCI, 3 months, lag 4",
+  value_num_utci_anomalies_6m_lag4 = "UTCI, 6 months, lag 4",
+  value_num_utci_anomalies_3m_lag5 = "UTCI, 3 months, lag 5",
+  dev_value_num_utci_anomalies_6m_lag4 = "Dev. UTCI, 6 months, lag 4",
+  dev_value_num_utci_anomalies_6m_lag10 = "Dev. UTCI, 6 months, lag 10"
+)
+```
+
+# Functions
+
+```{r}
+get_corrs_single_var <- function(data, var, level = "district") {
+  areas <- unique(data[[level]])
+  n_areas <- length(areas)
+  corrs <- list()
+  for (i in 1:n_areas) {
+    df_corr <- (
+      data
+      %>% filter(!!sym(level) == areas[i])
+      %>% select(
+        where(is.numeric) 
+      )
+      %>% na.omit()
+      %>% as.matrix()
+      %>% cor()
+      %>% as.data.frame()
+      %>% rownames_to_column("var1")
+      %>% pivot_longer(
+        cols = -var1,
+        names_to = "var2",
+        values_to = "correlation"
+      )
+      %>% filter(
+        (var1 != var2)
+        & (var2 == var)
+      )
+      %>% filter(
+        case_when(
+          str_detect(var, "maln") ~ !(str_detect(var1, "maln")),
+          str_detect(var, "viol") ~ !(str_detect(var1, "viol")),
+          TRUE ~ TRUE
+        )
+      )
+      %>% mutate(
+        !!sym(level) := areas[[i]]
+      )
+      %>% select(
+        !!sym(level),
+        variate = var2,
+        covariate = var1,
+        correlation
+      )
+    )
+    corrs[[i]] <- df_corr
+  }
+  df_corrs <- (
+    bind_rows(corrs)
+    %>% arrange(!!sym(level), desc(correlation))
+  )
+  df_corrs
+}
+
+get_mean_corr_single_var <- function(data, var, level) {
+  df_corrs <- get_corrs_single_var(data, var, level)
+  (
+    df_corrs
+    %>% group_by(variate, covariate)
+    %>% summarise(
+      median_corr = median(correlation, na.rm = TRUE),
+      mean_corr = mean(correlation, na.rm = TRUE),
+      sd_corr = sd(correlation, na.rm = TRUE),
+      min_corr = min(correlation, na.rm = TRUE),
+      max_corr = max(correlation, na.rm = TRUE),
+      .groups = "drop"
+    )
+    %>% mutate(
+      range_var = as.numeric(str_extract(variate, "(\\d+)(?=m)")),
+      range_covar = as.numeric(str_extract(covariate, "(\\d+)(?=m)"))
+    )
+    %>% filter(
+      case_when(
+        is.na(range_var) ~ TRUE,
+        is.na(range_covar) & !is.na(range_var) ~ FALSE,
+        !is.na(range_covar) & !is.na(range_var) & (range_var > range_covar) ~ FALSE,
+        TRUE ~ TRUE
+      )
+    )
+    %>% select(-c(range_covar, range_var))
+    %>% arrange(desc(min_corr))
+  )
+}
+
+get_mean_corrs_multi_var <- function(data, vars, level) {
+  
+  mean_corrs_list <- list()
+  for (i in seq_len(length(vars))) {
+    mean_corrs_list[[i]] <- get_mean_corr_single_var(data, vars[i], level)
+  }
+  (
+    bind_rows(mean_corrs_list)
+    %>% arrange(desc(min_corr))
+  )
+}
+```
+
+# Load Data
+
+## Geometries
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = case_match(
+      district,
+      # "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      # "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    ),
+    district_area = shape_area / 1000
+  )
+  %>% select(
+    district_code = objectid,
+    district,
+    district_area
+  )
+  %>% st_transform(4326)
+)
+```
+
+
+## DHIS2
+
+```{r}
+df_distr <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "climate_maln_viol_by_district.csv"
+    ),
+    show_col_types = FALSE
+  )
+)
+
+df_reg <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "climate_maln_viol_by_region.csv"
+    ),
+    show_col_types = FALSE
+  )
+)
+```
+
+# Correlation Analysis
+
+We remove the West Nile region because there is not climate variability
+
+```{r}
+df_reg_corr <- df_reg %>% filter(region != "West Nile")
+df_distr_corr <- df_distr %>% filter(region != "West Nile")
+```
+
+## Climate VS Malnutrition
+
+### By Region
+
+#### Mean correlations
+
+```{r}
+cols <- colnames(df_reg_corr)
+vars <- cols[str_detect(cols, "maln") & !str_detect(cols, "lag")]
+```
+
+```{r}
+mean_corrs_reg <-  get_mean_corrs_multi_var(df_reg_an, vars = vars, level = "region")
+```
+
+```{r}
+mean_corrs_reg
+```
+
+```{r}
+#| fig-width: 10
+#| fig-height: 12
+x <- "value_num_spei_anomalies_12m_lag11"
+y <- "dev_value_maln_cases_12m_per_1000"
+(
+  df_reg_corr
+  %>% select(
+    region,
+    !!sym(x),
+    !!sym(y)
+  )
+  %>% na.omit()
+  %>% ggplot(
+    aes(
+      x = !!sym(x),
+      y = !!sym(y),
+      color = region
+    )
+  )
+  + geom_point()
+  + geom_smooth(
+    mapping = aes(
+      color = region,
+      fill = region
+    ),
+    method = "lm",
+    formula = y ~ x
+  )
+  + facet_wrap(
+    ~ region,
+    ncol = 2,
+    scales = "free"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16),
+    axis.ticks.length = unit(4, "pt"),
+    axis.ticks = element_line(linewidth = 1),
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.position = "inside",
+    legend.position.inside = c(0.65, 0.7),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16)
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = label_map[x],
+    y = label_map[y]
+  )
+)
+```
+
+#### Single climate factor
+
+```{r}
+corr_spei_maln_reg <- list()
+for (i in 1:n_regions) {
+  df_corr <- (
+    df_reg_corr
+    %>% filter(region == regions[i])
+    %>% select(
+      value_num_spei_anomalies_12m_lag11,
+      dev_value_maln_cases_12m_per_1000
+    )
+    %>% na.omit()
+    %>% as.matrix()
+    %>% cor()
+    %>% as.data.frame()
+    %>% rownames_to_column("var1")
+    %>% pivot_longer(
+      cols = -var1,
+      names_to = "var2",
+      values_to = "correlation"
+    )
+    %>% filter(
+      (var1 > var2)
+    )
+    %>% mutate(
+      region = regions[[i]]
+    )
+    %>% select(
+      region,
+      correlation
+    )
+  )
+  corr_spei_maln_reg[[i]] <- df_corr[1, ]
+}
+df_corr_spei_maln_reg <- (
+  bind_rows(corr_spei_maln_reg)
+  %>% arrange(desc(correlation))
+)
+```
+
+### By District
+
+```{r}
+distrs <- unique(df_distr_corr$district)
+n_distrs <- length(distrs)
+corr_clim_maln_distr <- list()
+for (i in 1:n_distrs) {
+  df_corr <- (
+    df_distr_corr
+    %>% filter(district == distrs[i])
+    %>% select(
+      where(is.numeric) 
+    )
+    %>% na.omit()
+    %>% as.matrix()
+    %>% cor()
+    %>% as.data.frame()
+    %>% rownames_to_column("var1")
+    %>% pivot_longer(
+      cols = -var1,
+      names_to = "var2",
+      values_to = "correlation"
+    )
+    %>% filter(
+      (var1 != var2) 
+      & (str_detect(var2, "maln"))
+      & !(str_detect(var1, "viol"))
+      & !(str_detect(var1, "maln"))
+      & !(str_detect(var2, "lag"))
+    )
+    # %>% arrange(desc(abs(correlation)))
+    %>% arrange(desc(correlation))
+    %>% mutate(
+      district = distrs[[i]]
+    )
+  )
+  corr_clim_maln_distr[[i]] <- df_corr[1, ]
+}
+df_corr_distr <- (
+  bind_rows(corr_clim_maln_distr)
+  %>% arrange(desc(correlation))
+)
+```
+
+```{r}
+x <- "value_num_spei_anomalies_12m_lag12"
+y <- "value_maln_cases_3m_per_1000"
+(
+  df_distr_corr
+  %>% filter(district == "Pader")
+  %>% select(
+    !!sym(x),
+    !!sym(y)
+  )
+  %>% na.omit()
+  %>% ggplot(
+    aes(
+      x = !!sym(x),
+      y = !!sym(y)
+    )
+  ) 
+  + geom_point()
+)
+```
+
+```{r}
+(
+  df_distr_corr
+  %>% filter(district == distrs[i])
+  %>% select(
+    value_num_spei_anomalies_12m_lag12,
+    value_maln_cases_3m_per_1000
+  )
+  %>% na.omit()
+  %>% as.matrix()
+  %>% cor()
+  %>% as.data.frame()
+  %>% rownames_to_column("var1")
+  %>% pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+  %>% filter(
+    (var1 > var2)
+  )
+)
+```
+
+#### Single climate factor
+
+```{r}
+df_corr <- (
+  df_distr_corr
+  %>% filter(district == distrs[i])
+  %>% select(
+    where(is.numeric) 
+  )
+  %>% na.omit()
+  %>% as.matrix()
+  %>% cor()
+  %>% as.data.frame()
+  %>% rownames_to_column("var1")
+  %>% pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+  %>% filter(
+    (var1 != var2)
+    & (var2 == "value_maln_cases_3m_per_1000")
+  )
+  %>% filter(
+    case_when(
+      str_detect("value_maln_cases_3m_per_1000", "maln") ~ !(str_detect(var1, "maln")),
+      str_detect("value_maln_cases_3m_per_1000", "viol") ~ !(str_detect(var1, "viol")),
+      TRUE ~ TRUE
+    )
+  )
+  %>% mutate(
+    district = distrs[[i]]
+  )
+  # %>% select(
+  #   district,
+  #   correlation
+  # )
+)
+```
+
+```{r}
+distrs <- unique(df_distr_corr$district)
+n_distrs <- length(distrs)
+corr_spei_maln_distr <- list()
+for (i in 1:n_distrs) {
+  df_corr <- (
+    df_distr_corr
+    %>% filter(district == distrs[i])
+    %>% select(
+      value_num_utci_anomalies_12m,
+      value_maln_cases_12m_per_1000
+    )
+    %>% na.omit()
+    %>% as.matrix()
+    %>% cor()
+    %>% as.data.frame()
+    %>% rownames_to_column("var1")
+    %>% pivot_longer(
+      cols = -var1,
+      names_to = "var2",
+      values_to = "correlation"
+    )
+    %>% filter(
+      (var1 > var2)
+    )
+    %>% mutate(
+      district = distrs[[i]]
+    )
+    %>% select(
+      district,
+      correlation
+    )
+  )
+  corr_spei_maln_distr[[i]] <- df_corr[1, ]
+}
+df_corr_spei_maln_distr <- (
+  bind_rows(corr_spei_maln_distr)
+  %>% arrange(desc(correlation))
+)
+```
+
+```{r}
+hist(df_corr_spei_maln_distr$correlation)
+```
+
+## Malnutrition VS Violence
+
+```{r}
+regions <- unique(df_reg_corr$region)
+n_regions <- length(regions)
+corr_clim_viol_reg <- list()
+for (i in 1:n_regions) {
+  df_corr <- (
+    df_reg_corr
+    %>% filter(region == regions[[i]])
+    %>% select(
+      where(is.numeric) 
+    )
+    %>% na.omit()
+    %>% as.matrix()
+    %>% cor()
+    %>% as.data.frame()
+    %>% rownames_to_column("var1")
+    %>% pivot_longer(
+      cols = -var1,
+      names_to = "var2",
+      values_to = "correlation"
+    )
+    %>% filter(
+      (var1 != var2) 
+      & (str_detect(var2, "viol"))
+      & (str_detect(var1, "maln"))
+      & !(str_detect(var1, "viol"))
+      & !(str_detect(var2, "lag"))
+    )
+    %>% arrange(desc(abs(correlation)))
+    # %>% arrange(desc(correlation))
+    %>% mutate(
+      region = regions[[i]]
+    )
+  )
+  corr_clim_viol_reg[[i]] <- df_corr[1, ]
+}
+df_corr_viol_reg <- bind_rows(corr_clim_viol_reg)
+```
+
+```{r}
+#| fig-width: 10
+#| fig-height: 12
+p <- list()
+for (i in 1:nrow(df_corr_viol_reg)) {
+  p[[i]] <- (
+    df_reg_corr
+    %>% select(
+      region,
+      df_corr_viol_reg$var1[[i]],
+      df_corr_viol_reg$var2[[i]]
+    )
+    %>% na.omit()
+    %>% filter(region == df_corr_viol_reg$region[[i]])
+    %>% ggplot()
+    + geom_point(
+      aes(
+        x = !!sym(df_corr_viol_reg$var1[[i]]),
+        y = !!sym(df_corr_viol_reg$var2[[i]]),
+      )
+    )
+    + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16),
+      axis.ticks.length = unit(4, "pt"),
+      axis.ticks = element_line(linewidth = 1),
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 15),
+      legend.title = element_text(size = 16),
+      legend.text = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.position = "inside",
+      legend.position.inside = c(0.65, 0.7),
+    )
+    + labs(
+      title = df_corr_viol_reg$region[[i]],
+      x = label_map[df_corr_viol_reg$var1[[i]]],
+      y = label_map[df_corr_viol_reg$var2[[i]]]
+    )
+    + guides(
+      color = "none"
+    )
+  )
+}
+(
+  (p[[1]] + p[[2]])
+  / (p[[3]] + p[[4]])
+  / (p[[5]] + p[[6]])
+  / (p[[7]] + p[[8]])
+  / (p[[9]] + p[[10]])
+)
+```
+
+```{r}
+(
+  df_reg_corr
+  %>% filter(region == "Karamoja")
+  %>% select(
+    where(is.numeric) 
+    # & !contains("rainfall")
+  )
+  %>% na.omit()
+  %>% as.matrix()
+  %>% cor()
+  %>% as.data.frame()
+  %>% rownames_to_column("var1")
+  %>% pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+  %>% filter(
+    (var1 != var2) 
+    & !(str_detect(var1, "maln") & str_detect(var2, "maln"))
+    & !(str_detect(var1, "viol") & str_detect(var2, "viol"))
+    & (str_detect(var2, "cases"))
+  )
+  %>% arrange(desc(abs(correlation)))
+)
+```
+
+```{r}
+df_corr_distr <- (
+  df_distr_corr
+  %>% select(
+    where(is.numeric) 
+    # & !contains("rainfall")
+  )
+  %>% na.omit()
+  %>% as.matrix()
+  %>% cor()
+  %>% as.data.frame()
+  %>% rownames_to_column("var1")
+  %>% pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+  %>% filter(
+    (var1 != var2) 
+    & !(str_detect(var1, "maln") & str_detect(var2, "maln"))
+    & !(str_detect(var1, "viol") & str_detect(var2, "viol"))
+    & (str_detect(var2, "cases"))
+  )
+  %>% arrange(desc(abs(correlation)))
+)
+```
+
+```{r}
+df_corr_distr
+```
+
+```{r}
+(
+  df_distr_corr
+  %>% ggplot()
+  + geom_point(
+    aes(
+      x = value_num_utci_anomalies_12m,
+      y = value_maln_cases_12m_per_1000,
+      color = district
+    )
+  )
+  + guides(
+    color = "none"
+  )
+)
+```
+
+```{r}
+df_corr_reg <- (
+  df_reg_corr
+  %>% select(
+    where(is.numeric) 
+    # & !contains("rainfall")
+  )
+  %>% na.omit()
+  %>% as.matrix()
+  %>% cor()
+  %>% as.data.frame()
+  %>% rownames_to_column("var1")
+  %>% pivot_longer(
+    cols = -var1,
+    names_to = "var2",
+    values_to = "correlation"
+  )
+  %>% filter(
+    (var1 != var2) 
+    & !(str_detect(var1, "maln") & str_detect(var2, "maln"))
+    & !(str_detect(var1, "viol") & str_detect(var2, "viol"))
+    & (str_detect(var2, "cases"))
+  )
+  %>% arrange(desc(abs(correlation)))
+)
+```
+
+```{r}
+df_corr_reg
+```
+
+```{r}
+(
+  df_reg_corr
+  %>% ggplot()
+  + geom_point(
+    aes(
+      x = dev_value_num_utci_anomalies_12m,
+      y = dev_value_maln_cases_24m_per_1000,
+      color = region
+    )
+  )
+)
+```
+
+
+# Viz
+
+```{r}
+bin_centers_from_levels <- function(levels_chr) {
+  parts <- strsplit(str_remove_all(levels_chr, "[\\[\\]\\(\\) ]"), ",", fixed = FALSE)
+  lo <- as.numeric(vapply(parts, `[`, "", 1))
+  hi <- as.numeric(vapply(parts, `[`, "", 2))
+  centers <- (lo + hi) / 2
+  centers
+}
+```
+
+## Malnutrition VS Climate
+
+```{r}
+df_viz_maln_clim <- (
+  df_distr
+  %>% select(
+    district,
+    date,
+    rain = value_num_rainfall_anomalies_24m_lag5,
+    utci = value_num_utci_anomalies_6m_lag1,
+    spei = value_num_spei_anomalies_12m_lag12,
+    maln = value_maln_cases_per_1000,
+  )
+  %>% mutate(
+    year = year(date),
+    rain_binned = cut_width(rain, 5),
+    utci_binned = cut_width(utci, 20),
+  )
+)
+
+rain_lvls <- levels(df_viz_maln_clim$rain_binned)
+rain_centers <- bin_centers_from_levels(rain_lvls)
+utci_lvls <- levels(df_viz_maln_clim$utci_binned)
+utci_centers <- bin_centers_from_levels(utci_lvls)
+```
+
+### Rainfall
+
+```{r}
+#| fig-width: 11
+#| fig-height: 3
+
+(
+  df_viz_maln_clim
+  %>% filter(
+    year > 2022,
+    !is.na(rain_binned)
+  )
+  %>% ggplot(
+    aes(
+      x = rain_binned,
+      y = maln,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 1
+  )
+  + scale_x_discrete(
+    labels = setNames(
+      rain_centers,
+      rain_lvls
+    )
+  )
+  + paletteer::scale_color_paletteer_d(
+    "wesanderson::Zissou1"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Days of high rain (2 years, 5 months lagged)",
+    y = "Monthly malnutrition cases"
+  )
+)
+
+# ggsave(
+#   path = fig_dir,
+#   filename = "maln_cases_vs_rain_24m_lag5.png"
+# )
+```
+
+### UTCI
+
+```{r}
+#| fig-width: 11
+#| fig-height: 4.5
+
+(
+  df_viz_maln_clim
+  %>% filter(
+    !is.na(utci_binned),
+    utci <= 120
+  )
+  # %>% na.omit()
+  %>% ggplot(
+    aes(
+      x = utci_binned,
+      y = maln,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 2
+  )
+  + scale_x_discrete(
+    labels = setNames(
+      utci_centers,
+      utci_lvls
+    )
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Days of high UTCI (6 months, 1 month lagged)",
+    y = "Monthly malnutrition cases"
+  )
+)
+
+# ggsave(
+#   path = fig_dir,
+#   filename = "maln_cases_vs_utci_6m_lag1.png"
+# )
+```
+
+### SPEI
+
+```{r}
+#| fig-width: 11
+#| fig-height: 3
+
+(
+  df_viz_maln_clim
+  %>% filter(
+    !is.na(spei),
+    year > 2021
+  )
+  %>% ggplot(
+    aes(
+      x = as.factor(spei),
+      y = maln,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 1
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Months of low SPEI (12 months, 13 months lagged)",
+    y = "Monthly malnutrition cases"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "maln_cases_vs_spei_12m_lag13.png"
+)
+```
+
+## Violence VS Climate
+
+```{r}
+df_viz_viol_clim <- (
+  df_distr
+  %>% select(
+    district,
+    date,
+    rain = value_num_rainfall_anomalies_12m_lag1,
+    utci = value_num_utci_anomalies_12m_lag1,
+    spei = value_num_spei_anomalies_12m_lag1,
+    viol = value_viol_cases_per_1000
+  )
+  %>% mutate(
+    year = year(date),
+    rain_binned = cut_width(rain, 5),
+    utci_binned = cut_width(utci, 30),
+  )
+)
+
+rain_lvls_viol_clim <- levels(df_viz_viol_clim$rain_binned)
+rain_centers_viol_clim = bin_centers_from_levels(rain_lvls_viol_clim)
+utci_lvls_viol_clim <- levels(df_viz_viol_clim$utci_binned)
+utci_centers_viol_clim = bin_centers_from_levels(utci_lvls_viol_clim)
+```
+
+### Rainfall
+
+```{r}
+#| fig-width: 11
+#| fig-height: 3
+
+(
+  df_viz_viol_clim
+  %>% filter(
+    # year > 2022,
+    !is.na(rain_binned)
+  )
+  %>% ggplot(
+    aes(
+      x = rain_binned,
+      y = viol,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 1
+  )
+  + scale_x_discrete(
+    labels = setNames(
+      rain_centers_viol_clim,
+      rain_lvls_viol_clim
+    )
+  )
+  + paletteer::scale_color_paletteer_d(
+    "wesanderson::Zissou1"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Days of high rain (2 years, 5 months lagged)",
+    y = "Monthly violence cases"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_cases_vs_rain_24m_lag5.png"
+)
+```
+
+### UTCI
+
+#### All years
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+(
+  df_viz_viol_clim
+  %>% filter(
+    !is.na(utci_binned)
+  )
+  # %>% na.omit()
+  %>% ggplot(
+    aes(
+      x = utci_binned,
+      y = viol
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    # outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + scale_x_discrete(
+    labels = setNames(
+      utci_centers_viol_clim,
+      utci_lvls_viol_clim
+    )
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Days of high UTCI (6 months, 1 month lagged)",
+    y = "Monthly violence cases"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_cases_vs_utci_6m_lag1.png"
+)
+```
+
+```{r}
+#| fig-width: 11
+#| fig-height: 4.5
+
+(
+  df_viz_viol_clim
+  %>% filter(
+    !is.na(utci_binned)
+  )
+  # %>% na.omit()
+  %>% ggplot(
+    aes(
+      x = utci_binned,
+      y = viol,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 2
+  )
+  + scale_x_discrete(
+    labels = setNames(
+      utci_centers,
+      utci_lvls
+    )
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Days of high UTCI (6 months, 1 month lagged)",
+    y = "Monthly violence cases"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_cases_vs_utci_6m_lag1.png"
+)
+```
+
+### SPEI
+
+#### All years
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+(
+  df_viz_viol_clim
+  %>% filter(
+    !is.na(spei),
+    year > 2021
+  )
+  %>% ggplot(
+    aes(
+      x = as.factor(spei),
+      y = viol
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    # outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Months of low SPEI (12 months, 1 month lagged)",
+    y = "Monthly violence cases per 1000"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_cases_vs_spei_12m_lag1_all_years.png"
+)
+```
+
+```{r}
+#| fig-width: 11
+#| fig-height: 3
+
+(
+  df_viz_viol_clim
+  %>% filter(
+    !is.na(spei),
+    year > 2021
+  )
+  %>% ggplot(
+    aes(
+      x = as.factor(spei),
+      y = viol,
+      color = as.factor(year),
+    )
+  )
+  + geom_boxplot(
+    fill = NA,
+    outliers = FALSE,
+    whisker.linewidth = 1,
+    staple.linewidth = 1,
+    median.linewidth = 1,
+    box.linewidth = 1
+  )
+  + facet_wrap(
+    ~ year,
+    nrow = 1
+  )
+  + paletteer::scale_color_paletteer_d(
+      "LaCroixColoR::Orange"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),,
+    axis.title = element_text(size = 16),
+    axis.text = element_text(size = 15),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 15),
+    strip.placement = "outside",
+    strip.text = element_text(size = 15),
+    strip.background = element_blank()
+  )
+  + guides(
+    color = "none",
+    fill = "none"
+  )
+  + labs(
+    x = "Months of low SPEI (12 months, 13 months lagged)",
+    y = "Monthly violence cases"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_cases_vs_spei_12m_lag13.png"
+)
+```
+
+## Changes in time
+
+```{r}
+df_distr_year <- (
+  df_distr
+  %>% mutate(
+    year = year(date)
+  )
+  %>% select(
+    district,
+    year,
+    value_maln_cases_per_1000,
+    value_viol_cases_per_1000
+  )
+  %>% group_by(district, year)
+  %>% summarise(
+    mean_maln = mean(value_maln_cases_per_1000, na.rm = TRUE),
+    mean_viol = mean(value_viol_cases_per_1000, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+max_maln <- max(
+  df_distr_year
+  %>% filter(
+    year %in% c(2022, 2024),
+  )
+  %>% pull(mean_maln)
+)
+
+max_viol <- max(
+  df_distr_year
+  %>% filter(
+    year %in% c(2022, 2024),
+  )
+  %>% pull(mean_viol)
+)
+
+df_distr_year_plot <- (
+  df_distr_year
+  %>% pivot_wider(
+    id_cols = "district",
+    names_from = "year",
+    values_from = c("mean_maln", "mean_viol")
+  )
+  %>% mutate(
+    worse_maln = as.character(mean_maln_2024 > mean_maln_2022),
+    worse_viol = as.character(mean_viol_2024 > mean_viol_2022)
+  )
+  %>% na.omit()
+)
+```
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 3.5
+(
+  ggplot(
+    data = df_distr_year_plot,
+    mapping = aes(
+      x = mean_maln_2022,
+      y = mean_maln_2024,
+      color = worse_maln
+    )
+  )
+  + geom_abline(
+    intercept = 0,
+    slope = 1,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  )
+  + geom_point(
+    size = 2,
+    alpha = 0.7
+  )
+  + geom_text(
+    data = subset(df_distr_year_plot, (mean_maln_2024 - mean_maln_2022) > 0.15),
+    mapping = aes(
+      x = mean_maln_2022,
+      y = mean_maln_2024 + 0.1,
+      label = district,
+    ),
+    color = "#D5695DFF",
+    size = 3
+  )
+  + geom_text(
+    data = subset(df_distr_year_maln_plot, (mean_maln_2024 - mean_maln_2022) < -0.45),
+    mapping = aes(
+      x = mean_maln_2022,
+      y = mean_maln_2024 + 0.1,
+      label = district,
+    ),
+    color = "#65A479FF",
+    size = 3
+  )
+  + scale_color_manual(
+    values = c("TRUE" = "#D5695DFF", "FALSE" = "#65A479FF")
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    panel.border = element_rect(size = 1),
+    axis.ticks = element_line(linewidth = 1),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14)
+  )
+  + scale_x_continuous(
+    limits = c(-0.4, max_maln + 0.2)
+  )
+  + scale_y_continuous(
+    limits = c(0, max_maln)
+  )
+  + labs(
+    x = "Mean maln. per 1000\n(2022)",
+    y = "Mean maln. per 1000\n(2024)"
+  )
+  + guides(
+    color = "none"
+  )
+)
+```
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 3.5
+(
+  ggplot(
+    data = df_distr_year_plot,
+    mapping = aes(
+      x = mean_viol_2022,
+      y = mean_viol_2024,
+      color = worse_viol
+    )
+  )
+  + geom_abline(
+    intercept = 0,
+    slope = 1,
+    color = "black",
+    linetype = "dashed",
+    linewidth = 1
+  )
+  + geom_point(
+    alpha = 0.7,
+    size = 2
+  )
+  + geom_text(
+    data = subset(df_distr_year_plot, (mean_viol_2024 - mean_viol_2022) > 0.45),
+    mapping = aes(
+      x = mean_viol_2022,
+      y = mean_viol_2024 + 0.1,
+      label = district,
+    ),
+    color = "#D5695DFF",
+    size = 3
+  )
+  + geom_text(
+    data = subset(df_distr_year_plot, (mean_viol_2024 - mean_viol_2022) < -0.25),
+    mapping = aes(
+      x = mean_viol_2022,
+      y = mean_viol_2024 + 0.1,
+      label = district
+    ),
+    color = "#65A479FF",
+    size = 3
+  )
+  + scale_color_manual(
+    values = c("TRUE" = "#D5695DFF", "FALSE" = "#65A479FF")
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    panel.border = element_rect(size = 1),
+    axis.ticks = element_line(linewidth = 1),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14)
+  )
+  + scale_x_continuous(
+    limits = c(-0.15, max_viol)
+  )
+  + scale_y_continuous(
+    limits = c(0, max_viol + 0.1)
+  )
+  + labs(
+    x = "Mean viol. per 1000\n(2022)",
+    y = "Mean viol. per 1000\n(2024)"
+  )
+  + guides(
+    color = "none"
+  )
+)
+```
+
+### Over time
+
+Select most changed district to see patterns over time
+
+```{r}
+maln_distr_to_plot <- (
+  df_distr_year_plot
+  %>% filter(
+    ((mean_maln_2024 - mean_maln_2022) > 0.1)
+    | ((mean_maln_2024 - mean_maln_2022) < -0.45)
+  )
+  %>% distinct(district)
+  %>% pull(district)
+)
+
+viol_distr_to_plot <- (
+  df_distr_year_plot
+  %>% filter(
+    ((mean_viol_2024 - mean_viol_2022) > 0.4)
+    | ((mean_viol_2024 - mean_viol_2022) < -0.12)
+  )
+  %>% distinct(district)
+  %>% pull(district)
+)
+```
+
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+(
+  df_distr
+  %>% filter(
+    year(date) > 2021,
+    district %in% maln_distr_to_plot
+  )
+  %>% group_by(district)
+  %>% mutate(
+    diff_maln = value_maln_cases_per_1000 - first(value_maln_cases_per_1000),
+    worse = (last(value_maln_cases_per_1000) - first(value_maln_cases_per_1000)) > 0
+  )
+  %>% select(
+    district,
+    date,
+    diff_maln,
+    worse
+  )
+  %>% ggplot()
+  + geom_line(
+    mapping = aes(
+      x = date,
+      y = diff_maln,
+      color = district
+    )
+  )
+  + facet_wrap(
+    ~district,
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    panel.border = element_rect(size = 1),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16),
+    axis.ticks = element_line(linewidth = 1),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13)
+  )
+  + labs(
+    x = "Date",
+    y = "Change in Malnutrition\n(cases per 1000)",
+    color = "District"
+  )
+)
+  
+    
+```
+All districts with the largest reduction are in Karamoja.
+
+```{r}
+#| fig-width: 9
+#| fig-height: 5
+(
+  df_distr
+  %>% filter(
+    # year(date) > 2020,
+    district %in% viol_distr_to_plot
+  )
+  %>% group_by(district)
+  %>% mutate(
+    diff_viol = value_viol_cases_per_1000 - first(value_viol_cases_per_1000),
+    worse = (last(value_viol_cases_per_1000) - first(value_viol_cases_per_1000)) > 0
+  )
+  %>% select(
+    district,
+    date,
+    diff_viol,
+    worse
+  )
+  %>% ggplot()
+  + geom_line(
+    mapping = aes(
+      x = date,
+      y = diff_viol,
+      color = district
+    )
+  )
+  + facet_wrap(
+    ~district,
+    scales = "free_y",
+    ncol = 3
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    panel.border = element_rect(size = 1),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 16),
+    axis.ticks = element_line(linewidth = 1),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13)
+  )
+  + labs(
+    x = "Date",
+    y = "Change in Violence\n(cases per 1000)",
+    color = "District"
+  )
+)
+  
+    
+```
+
+# Maps
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  df_distr_year_plot
+  %>% mutate(
+    diff_maln = mean_maln_2024 - mean_maln_2022
+  )
+  %>% merge(
+    sf_uga %>% select(district),
+    by = "district",
+    all.x = TRUE,
+  )
+  %>% st_as_sf()
+  %>% ggplot(
+    mapping = aes(
+      fill = diff_maln
+    )
+  )
+  + geom_sf(
+    color = "black",
+    size = 0.1
+  )
+  + scale_fill_paletteer_c(
+    palette = "ggthemes::Temperature Diverging",
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13)
+  )
+  + labs(
+    fill = "Change in Malnutrition\n2022-2024\n(cases per 1000)"
+  )
+)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  df_distr_year_plot
+  %>% mutate(
+    diff_viol = mean_viol_2024 - mean_viol_2022
+  )
+  %>% merge(
+    sf_uga %>% select(district),
+    by = "district",
+    all.x = TRUE,
+  )
+  %>% st_as_sf()
+  %>% ggplot(
+    mapping = aes(
+      fill = diff_viol
+    )
+  )
+  + geom_sf(
+    color = "black",
+    size = 0.1
+  )
+  + scale_fill_paletteer_c(
+    palette = "grDevices::Oranges",
+    direction = -1,
+    # transform = "log10"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 15),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13)
+  )
+  + labs(
+    fill = "Change in Violence\n2022-2024\n(cases per 1000)"
+  )
+)
+```

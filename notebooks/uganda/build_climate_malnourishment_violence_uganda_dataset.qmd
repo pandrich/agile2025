@@ -1,0 +1,1285 @@
+---
+title: "Uganda Disaster Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(tidyterra)
+library(readxl)
+library(sf)
+
+# Set random seed
+nb_name <- "Agile 2025 - Build climate & Violence dataset for Uganda"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+output_data_dir <- root("data/processed/uganda")
+dir.create(output_data_dir, showWarnings = FALSE)
+```
+
+# Functions
+
+```{r}
+clean_column_name <- function(cols) {
+  cols <- tolower(cols)
+  cols <- gsub("[.:,'()-/?]", "", cols)
+  cols <- str_squish(cols)
+  for (i in 1:length(cols)) {
+    cols[i] <- paste0(unlist(strsplit(cols[i], " ")), collapse = "_")
+  }
+  cols
+}
+
+load_dhis_viol_data <- function(filename) {
+  filepath <- file.path(raw_data_dir, "Uganda", "DHIS2", filename)
+  sheet_names <- excel_sheets(filepath)
+  dfs <- list()
+  for (i in 1:length(sheet_names)) {
+    dhis_raw <- read_xlsx(
+      file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+      sheet = sheet_names[i],
+      col_names = FALSE,
+      .name_repair = "unique_quiet"
+    )
+    headers <- as_tibble(t(zoo::na.locf(t(dhis_raw[1:4, 1:(dim(dhis_raw)[2] -1)]))))
+    combined_names <- apply(headers, 2, function(x) paste(x, collapse = "_"))
+  
+    df_dhis <- (
+      read_xlsx(
+        file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+        sheet = sheet_names[i],
+        skip = 5,
+        col_names = FALSE,
+        .name_repair = "unique_quiet"
+      )
+      %>% select(-last_col())
+      %>% head(-1)
+    )
+    colnames(df_dhis) <- combined_names
+  
+    dfs[[i]] <- (
+      df_dhis
+      %>% rename(
+        district = 1
+      )
+      %>% pivot_longer(
+        cols = -district,
+        names_to = c("variable", "month", "sex", "age_bracket"),
+        names_sep = "_",
+        values_to = "cases"
+      )
+      %>% mutate(
+        year = sheet_names[i],
+        sex = if_else(
+          variable == "Abortions due to Gender-Based Violence",
+          "Female",
+          sex
+        )
+      )
+    )
+  }
+  (
+    bind_rows(dfs)
+    %>% mutate(
+      district = str_squish(str_remove_all(district, "District")),
+      date = lubridate::ceiling_date(
+        as.Date(paste(year, month, "01", sep="-"), "%Y-%B-%d"),
+        "month"
+      ) - lubridate::days(1),
+      cases = replace_na(cases, 0)
+    )
+    %>% mutate(
+      district = case_when(
+        district == "Madi-Okollo" ~ "Madi Okollo",
+        district == "Sembabule" ~ "Ssembabule",
+        .default = district
+      )
+    )
+    # %>% group_by(district, date, variable, sex, age_bracket)
+    # %>% summarise(
+    #   cases = sum(cases, na.rm = TRUE),
+    #   .groups = "drop"
+    # )
+    %>% select(-c("month", "year"))
+    %>% arrange(district, date, variable, sex, age_bracket)
+  )
+}
+
+load_dhis_maln_data <- function(filename) {
+  filepath <- file.path(raw_data_dir, "Uganda", "DHIS2", filename)
+  sheet_names <- excel_sheets(filepath)
+  dfs <- list()
+  for (i in 1:length(sheet_names)) {
+    dhis_raw <- read_xlsx(
+      file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+      sheet = sheet_names[i],
+      col_names = FALSE,
+      .name_repair = "unique_quiet"
+    )
+    headers <- as_tibble(t(zoo::na.locf(t(dhis_raw[1:2, 1:(dim(dhis_raw)[2] -1)]))))
+    combined_names <- apply(headers, 2, function(x) paste(x, collapse = "_"))
+  
+    df_dhis <- (
+      read_xlsx(
+        file.path(raw_data_dir, "Uganda", "DHIS2", filename),
+        sheet = sheet_names[i],
+        skip = 2,
+        col_names = FALSE,
+        .name_repair = "unique_quiet"
+      )
+      %>% select(-last_col())
+    )
+    colnames(df_dhis) <- combined_names
+  
+    dfs[[i]] <- (
+      df_dhis
+      %>% rename(
+        district = "Data element_District/Month"
+      )
+      %>% pivot_longer(
+        cols = -district,
+        names_to = c("variable", "month"),
+        names_sep = "_",
+        values_to = "cases"
+      )
+      %>% mutate(
+        year = sheet_names[i],
+        # sex = if_else(
+        #   variable == "Abortions due to Gender-Based Violence",
+        #   "Female",
+        #   sex
+        # )
+      )
+    )
+  }
+  (
+    bind_rows(dfs)
+    %>% mutate(
+      district = str_squish(str_remove_all(district, "District")),
+      date = lubridate::ceiling_date(
+        as.Date(paste(year, month, "01", sep="-"), "%Y-%B-%d"),
+        "month"
+      ) - lubridate::days(1),
+      cases = replace_na(cases, 0)
+    )
+    %>% mutate(
+      district = case_when(
+        district == "Madi-Okollo" ~ "Madi Okollo",
+        district == "Sembabule" ~ "Ssembabule",
+        .default = district
+      )
+    )
+    %>% arrange(district, date, variable)
+  )
+}
+```
+
+# Parameters
+
+```{r params}
+# west_nile_region <- c(
+#   "Adjumani",
+#   "Madi Okollo",
+#   "Zombo"
+# )
+# 
+# regions_with_operations <- c(
+#   "Mayuge",
+#   "Budaka",
+#   "Nakapiripiti",
+#   "Tororo",
+#   "Bulambuli",
+#   "Soroti",
+#   "Lira",
+#   "Napak",
+#   "Kamuli",
+#   "Kayunga",
+#   "Luuka",
+#   "Sironko"
+# )
+# 
+# elgon_region <- c(
+#   "Bududa",
+#   "Bukedea",
+#   "Bukwo",
+#   "Bulambuli",
+#   "Butaleja",
+#   "Kapchorwa",
+#   "Kween",
+#   "Manafwa",
+#   "Mbale", 
+#   "Namisindwa",
+#   "Sironko", 
+#   "Tororo"
+# )
+# 
+# karamoja_region <- c(
+#   "Abim",
+#   "Amudat",
+#   "Kaabong", 
+#   "Karenga",
+#   "Kotido", 
+#   "Moroto",
+#   "Nabilatuk",
+#   "Nakapiripirit",
+#   "Napak"
+# )
+# 
+# rwenzori_region <- c(
+#   "Bundibugyo",
+#   "Bunyangabu",
+#   "Kasese"
+# )
+# 
+# teso_region <- c(
+#   "Amuria",
+#   "Kapelebyong",
+#   "Katakwi",
+#   "Kumi",
+#   "Bukedea",
+#   "Butebo",
+#   "Budaka"
+# )
+west_nile_region <- c(
+  "Arua City",
+  "Koboko",
+  "Yumbe",
+  "Moyo",
+  "Obongi",
+  "Maracha",
+  "Arua",
+  "Adjumani",
+  "Madi Okollo",
+  "Zombo",
+  "Nebbi",
+  "Pakwach",
+  "Terego"
+)
+acholi_region <- c(
+  "Amuru",
+  "Nwoya",
+  "Gulu",
+  "Gulu City",
+  "Omoro",
+  "Lamwo",
+  "Pader",
+  "Kitgum",
+  "Pader",
+  "Agago"
+)
+karamoja_region <- c(
+  "Abim",
+  "Amudat",
+  "Kaabong", 
+  "Karenga",
+  "Kotido", 
+  "Moroto",
+  "Nabilatuk",
+  "Nakapiripirit",
+  "Napak"
+)
+elgon_region <- c(
+  "Bududa",
+  "Bukwo",
+  "Bulambuli",
+  "Butaleja",
+  "Kapchorwa",
+  "Kween",
+  "Manafwa",
+  "Mbale", 
+  "Mbale City",
+  "Namisindwa",
+  "Sironko", 
+  "Tororo"
+)
+teso_region <- c(
+  "Bukedea",
+  "Butebo",
+  "Budaka",
+  "Kibuku",
+  "Pallisa",
+  "Kumi",
+  "Ngora",
+  "Katakwi",
+  "Kapelebyong",
+  "Amuria",
+  "Kalaki",
+  "Soroti",
+  "Soroti City",
+  "Serere",
+  "Kaberamaido"
+)
+lango_region <- c(
+  "Otuke",
+  "Alebtong",
+  "Lira",
+  "Oyam",
+  "Kole",
+  "Dokolo",
+  "Kwania",
+  "Apac",
+  "Amolatar",
+  "Lira City"
+)
+western_region <- c(
+  "Buliisa",
+  "Masindi",
+  "Kiryandongo",
+  "Hoima",
+  "Kikuube",
+  "Kagadi",
+  "Kakumiro",
+  "Kibaale",
+  "Ntoroko",
+  "Kyegegwa",
+  "Kyenjojo",
+  "Kabarole",
+  "Bundibugyo",
+  "Bunyangabu",
+  "Kamwenge",
+  "Kasese",
+  "Kitagwenda",
+  "Fort Portal City",
+  "Hoima City"
+)
+south_wester_region <- c(
+  "Kazo",
+  "Ibanda",
+  "Rubirizi",
+  "Buhweju",
+  "Bushenyi",
+  "Rukungiri",
+  "Sheema", 
+  "Mbarara",
+  "Mbarara City",
+  "Kiruhura",
+  "Mitooma",
+  "Rwampara",
+  "Kanungu",
+  "Ntungamo",
+  "Isingiro",
+  "Rubanda",
+  "Rukiga",
+  "Kisoro",
+  "Kabale"
+)
+central_region <- c(
+  "Nakasongola",
+  "Kyankwanzi",
+  "Nakaseke",
+  "Luwero",
+  "Kayunga",
+  "Kiboga",
+  "Kassanda",
+  "Mubende",
+  "Mityana",
+  "Butambala", 
+  "Kampala", 
+  "Mukono",
+  "Buikwe",
+  "Gomba",
+  "Ssembabule",
+  "Kalungu",
+  "Mpigi",
+  "Wakiso",
+  "Lyantonde",
+  "Bukomansimbi",
+  "Lwengo", 
+  "Masaka",
+  "Masaka City",
+  "Rakai",
+  "Kyotera", 
+  "Kalangala", 
+  "Buvuma"
+)
+east_central_region <- c(
+  "Buyende",
+  "Kamuli",
+  "Kaliro",
+  "Namutumba",
+  "Luuka",
+  "Jinja", 
+  "Jinja City",
+  "Iganga",
+  "Bugweri",
+  "Bugiri",
+  "Mayuge",
+  "Busia",
+  "Namayingo"
+)
+```
+
+# Load data
+
+## Geometries
+
+From data sent by Herbert
+
+```{r load_data geom}
+# Sys.setenv(SHAPE_RESTORE_SHX='YES')
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = case_match(
+      district,
+      # "SSEMBABULE" ~ "Sembabule",
+      "KASSNDA" ~ "Kassanda",
+      # "MADI OKOLLO" ~ "Madi-Okollo",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    ),
+    district_area = shape_area / 1000
+  )
+  %>% select(
+    district_code = objectid,
+    district,
+    district_area
+  )
+  %>% st_transform(4326)
+)
+```
+
+## Population
+
+### All Population
+
+```{r}
+rast_pop <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "uga_pop_2024_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2024_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+df_pop <- (
+  rast_pop
+  %>% exactextractr::exact_extract(
+    sf_uga,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("district_code", "district")
+  )
+  %>% rename(
+    pop = result
+  )
+  %>% mutate(
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+## Malnutrition
+
+```{r}
+df_maln <- (
+  load_dhis_maln_data("Nutrition_Data.xlsx")
+  %>% mutate(
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+## Population weighted UTCI
+
+```{r}
+df_utci <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "UTCI",
+      "weighted_utci_max_daily_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country == "Uganda"
+  )
+  %>% group_by(
+    district_code = adm_code,
+    district = adm_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    num_utci_anomalies = sum(utci_max > 36, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% mutate(
+    district = case_when(
+      district == "Kassnda" ~ "Kassanda",
+      district == "Sembabule" ~ "Ssembabule",
+      district == "Namutunmba" ~ "Namutumba",
+      .default = district
+    ),
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+## Population weighted SPEI
+
+```{r}
+df_spei <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "SPEI",
+      "weighted_spei_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country == "Uganda"
+  )
+  %>% mutate(
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1),
+    num_spei_anomalies = as.numeric(spei < -1)
+  )
+  %>% rename(
+    district_code = adm_code,
+    district = adm_name,
+  )
+  %>% select(-c(country, pop, spei))
+  %>% mutate(
+    district = case_when(
+      district == "Kassnda" ~ "Kassanda",
+      district == "Sembabule" ~ "Ssembabule",
+      district == "Namutunmba" ~ "Namutumba",
+      .default = district
+    ),
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+## Population weighted rainfall
+
+```{r}
+df_rain <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "rainfall",
+      "weighted_rain_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country == "Uganda"
+  )
+  %>% group_by(
+    district = adm_name,
+    month = lubridate::month(date)
+  )
+  %>% mutate(
+    mean_month_rainfall = mean(rainfall, na.rm = TRUE),
+    sd_month_rainfall = sd(rainfall, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% group_by(
+    district_code = adm_code,
+    district,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    num_rainfall_anomalies = sum(rainfall > mean_month_rainfall + 2 * sd_month_rainfall, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% mutate(
+    district = case_when(
+      district == "Kassnda" ~ "Kassanda",
+      district == "Sembabule" ~ "Ssembabule",
+      district == "Namutunmba" ~ "Namutumba",
+      .default = district
+    ),
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol <- (
+  load_dhis_viol_data("DHIS2_GBV_Data.xlsx")
+  %>% mutate(
+    region = case_when(
+      district %in% acholi_region ~ "Acholi",
+      district %in% central_region ~ "Central",
+      district %in% east_central_region ~ "East Central",
+      district %in% elgon_region ~ "Elgon",
+      district %in% karamoja_region ~ "Karamoja",
+      district %in% lango_region ~ "Lango",
+      district %in% south_wester_region ~ "South Western",
+      district %in% teso_region ~ "Teso",
+      district %in% west_nile_region ~ "West Nile",
+      district %in% western_region ~ "Western",
+      # .default = "Other regions"
+    )
+  )
+)
+```
+
+# Data processing
+
+## Population
+
+```{r}
+df_pop_reg <- (
+  df_pop
+  %>% group_by(region)
+  %>% summarise(
+    pop = sum(pop, na.rm = TRUE)
+  )
+)
+```
+
+## Malnutrition
+
+```{r}
+df_maln_distr <- (
+  df_maln
+  %>% filter(
+    variable != "Clients with SAM admitted into treatment - Died during treatment",
+    date < "2025-01-01"
+  )
+  %>% group_by(
+    region,
+    district,
+    date
+  )
+  %>% summarise(
+    maln_cases = sum(cases, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+df_maln_reg <- (
+  df_maln
+  %>% filter(
+    variable != "Clients with SAM admitted into treatment - Died during treatment",
+    date < "2025-01-01"
+  )
+  %>% group_by(
+    region,
+    date
+  )
+  %>% summarise(
+    maln_cases = sum(cases, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol_distr <- (
+  df_viol
+  %>% filter(
+    variable == "Injuries due to Gender based violence"
+  )
+  %>% group_by(
+    region,
+    district, 
+    date
+  )
+  %>% summarise(
+    viol_cases = sum(cases, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+df_viol_reg <- (
+  df_viol
+  %>% filter(
+    variable == "Injuries due to Gender based violence"
+  )
+  %>% group_by(
+    region, 
+    date
+  )
+  %>% summarise(
+    viol_cases = sum(cases, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+## UTCI
+
+```{r}
+df_utci_reg <- (
+  df_utci
+  %>% group_by(region, date)
+  %>% summarise(
+    num_utci_anomalies = mean(num_utci_anomalies, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+## SPEI
+
+```{r}
+df_spei_reg <- (
+  df_spei
+  %>% group_by(region, date)
+  %>% summarise(
+    num_spei_anomalies = mean(num_spei_anomalies, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+## Rainfall
+
+```{r}
+df_rain_reg <- (
+  df_rain
+  %>% group_by(region, date)
+  %>% summarise(
+    num_rainfall_anomalies = mean(num_rainfall_anomalies, na.rm = TRUE),
+    .groups = "drop"
+  )
+)
+```
+
+## Combine malnutrition and violence
+
+```{r}
+df_health_distr <- (
+  df_maln_distr
+  %>% merge(
+    df_viol_distr,
+    by = c("region", "district", "date"),
+    all.x = TRUE
+  )
+  # %>% merge(
+  #   df_pop %>% select(-district_code),
+  #   by = "district",
+  #   all.x = TRUE
+  # )
+  # %>% pivot_longer(
+  #   cols = -c(district, pop, date),
+  #   names_to = "variable",
+  #   values_to = "value"
+  # )
+  # %>% mutate(
+  #   value_per_1000 = 1000 * value / pop
+  # )
+  # %>% group_by(district, variable)
+  # %>% mutate(
+  #   mean_value = mean(value, na.rm = TRUE),
+  #   sd_value = sd(value, na.rm = TRUE),
+  #   mean_value_per_1000 = mean(value_per_1000, na.rm = TRUE),
+  #   sd_value_per_1000 = sd(value_per_1000, na.rm = TRUE)
+  # )
+  # %>% ungroup()
+  # %>% mutate(
+  #   dev_value = if_else(
+  #     sd_value > 0,
+  #     (value - mean_value) /sd_value,
+  #     0
+  #   ),
+  #   dev_value_per_1000 = if_else(
+  #     sd_value_per_1000 > 0,
+  #     (value_per_1000 - mean_value_per_1000) / sd_value_per_1000,
+  #     0
+  #   )
+  # )
+  # %>% select(
+  #   -c(pop, mean_value, sd_value, mean_value_per_1000, sd_value_per_1000)
+  # )
+  # %>% pivot_wider(
+  #   id_cols = c(district, date),
+  #   names_from = "variable",
+  #   values_from = c(value, dev_value, value_per_1000, dev_value_per_1000)
+  # )
+  %>% arrange(district, date)
+)
+```
+
+```{r}
+df_health_reg <- (
+  df_maln_reg
+  %>% merge(
+    df_viol_reg,
+    by = c("region", "date"),
+    all.x = TRUE
+  )
+  # %>% merge(
+  #   df_pop_reg,
+  #   by = "region",
+  #   all.x = TRUE
+  # )
+  # %>% pivot_longer(
+  #   cols = -c(region, pop, date),
+  #   names_to = "variable",
+  #   values_to = "value"
+  # )
+  # %>% mutate(
+  #   value_per_1000 = 1000 * value / pop
+  # )
+  # %>% group_by(region, variable)
+  # %>% mutate(
+  #   mean_value = mean(value, na.rm = TRUE),
+  #   sd_value = sd(value, na.rm = TRUE),
+    # mean_value_per_1000 = mean(value_per_1000, na.rm = TRUE),
+    # sd_value_per_1000 = sd(value_per_1000, na.rm = TRUE)
+  # )
+  # %>% ungroup()
+  # %>% mutate(
+  #   dev_value = if_else(
+  #     sd_value > 0,
+  #     (value - mean_value) /sd_value,
+  #     0
+  #   ),
+  #   dev_value_per_1000 = if_else(
+  #     sd_value_per_1000 > 0,
+  #     (value_per_1000 - mean_value_per_1000) / sd_value_per_1000,
+  #     0
+  #   )
+  # )
+  # %>% select(
+  #   -c(pop, mean_value, sd_value, mean_value_per_1000, sd_value_per_1000)
+  # )
+  # %>% pivot_wider(
+  #   id_cols = c(region, date),
+  #   names_from = "variable",
+  #   values_from = c(value, dev_value, value_per_1000, dev_value_per_1000)
+  # )
+  %>% arrange(region, date)
+)
+```
+
+## Compounded violence and malnutrition effects
+
+```{r}
+df_health_distr_cum <- (
+  df_health_distr
+  %>% group_by(region, district)
+  %>% mutate(
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 3, fill = NA, align = "right"),
+        .names = "{.col}_3m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 6, fill = NA, align = "right"),
+        .names = "{.col}_6m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 12, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 24, fill = NA, align = "right"),
+        .names = "{.col}_24m"
+    )
+  )
+)
+```
+
+```{r}
+df_health_reg_cum <- (
+  df_health_reg
+  %>% group_by(region)
+  %>% mutate(
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 3, fill = NA, align = "right"),
+        .names = "{.col}_3m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 6, fill = NA, align = "right"),
+        .names = "{.col}_6m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 12, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 24, fill = NA, align = "right"),
+        .names = "{.col}_24m"
+    )
+  )
+)
+```
+
+## Combine climate variables
+
+```{r}
+df_clim_distr <- (
+  df_utci
+  %>% merge(
+    df_spei %>% select(-c(region, district)),
+    by = c("district_code", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_rain %>% select(-c(region, district)),
+    by = c("district_code", "date"),
+    all.x = TRUE
+  )
+  %>% select(-c(district_code))
+)
+```
+
+```{r}
+colSums(is.na(df_clim_distr))
+```
+
+```{r}
+df_clim_reg <- (
+  df_utci_reg
+  %>% merge(
+    df_spei_reg,
+    by = c("region", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_rain_reg,
+    by = c("region", "date"),
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+colSums(is.na(df_clim_reg))
+```
+
+## Compounded climate effects
+
+```{r}
+df_clim_distr_month_cum <- (
+  df_clim_distr
+  %>% group_by(region, district)
+  %>% mutate(
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 3, fill = NA, align = "right"),
+        .names = "{.col}_3m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 6, fill = NA, align = "right"),
+        .names = "{.col}_6m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 12, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 18, fill = NA, align = "right"),
+        .names = "{.col}_18m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 24, fill = NA, align = "right"),
+        .names = "{.col}_24m"
+    )
+  )
+  %>% select(
+    date,
+    region,
+    district,
+    matches("_\\d+m")
+  )
+)
+```
+
+```{r}
+df_clim_reg_month_cum <- (
+  df_clim_reg
+  %>% group_by(region)
+  %>% mutate(
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 3, fill = NA, align = "right"),
+        .names = "{.col}_3m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 6, fill = NA, align = "right"),
+        .names = "{.col}_6m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 12, fill = NA, align = "right"),
+        .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 18, fill = NA, align = "right"),
+        .names = "{.col}_18m"
+    ),
+    across(
+      -c(date, matches("_\\d+m")),
+      ~ zoo::rollsum(., k = 24, fill = NA, align = "right"),
+        .names = "{.col}_24m"
+    )
+  )
+  %>% select(
+    date,
+    region,
+    matches("_\\d+m")
+  )
+)
+```
+
+## Combine all
+
+```{r}
+lags <- 1:12
+```
+
+```{r}
+df_distr <- (
+  df_health_distr_cum
+  %>% merge(
+    df_clim_distr_month_cum,
+    by = c("region", "district", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_pop,
+    by = c("region", "district"),
+    all.x = TRUE
+  )
+  %>% select(
+    region,
+    district,
+    date,
+    pop,
+    (matches("_\\d+m") | contains("cases"))
+  )
+  %>% mutate(
+    across(
+      .cols = matches("maln|viol"),
+      .fns = ~ . * 1000 / pop,
+      .names = "{.col}_per_1000"
+    )
+  )
+  %>% select(
+    !(matches("maln|viol") & !contains("per_1000"))
+  )
+  %>% pivot_longer(
+    cols = -c(region, district, pop, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(region, district, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = if_else(
+      sd_value > 0,
+      (value - mean_value) /sd_value,
+      0
+    )
+  )
+  %>% select(
+    -c(mean_value, sd_value)
+  )
+  %>% pivot_wider(
+    id_cols = c(region, district, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+  %>% arrange(region, district, date)
+  %>% group_by(region, district)
+  %>% mutate(
+    across(
+      .cols = matches("_\\d+m") & !contains("viol"),
+      .fns  = setNames(
+        lapply(lags, function(n) function(x) lag(x, n)), # this passes a list of named functions so that then I can use {.fn} later
+        paste0("lag", lags)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  )
+  %>% ungroup()
+)
+```
+
+```{r}
+df_reg <- (
+  df_health_reg_cum
+  %>% merge(
+    df_clim_reg_month_cum,
+    by = c("region", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_pop_reg,
+    by = c("region"),
+    all.x = TRUE
+  )
+  %>% select(
+    region,
+    date,
+    pop,
+    (matches("_\\d+m") | contains("cases"))
+  )
+  %>% mutate(
+    across(
+      .cols = matches("maln|viol"),
+      .fns = ~ . * 1000 / pop,
+      .names = "{.col}_per_1000"
+    )
+  )
+  %>% select(
+    !(matches("maln|viol") & !contains("per_1000"))
+  )
+  %>% pivot_longer(
+    cols = -c(region, pop, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(region, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = if_else(
+      sd_value > 0,
+      (value - mean_value) /sd_value,
+      0
+    )
+  )
+  %>% select(
+    -c(mean_value, sd_value)
+  )
+  %>% pivot_wider(
+    id_cols = c(region, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+  %>% arrange(region, date)
+  %>% group_by(region)
+  %>% mutate(
+    across(
+      .cols = matches("_\\d+m") & !contains("viol"),
+      .fns  = setNames(
+        lapply(lags, function(n) function(x) lag(x, n)), # passing a named list of functions
+        paste0("lag", lags)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  )
+  %>% ungroup()
+)
+```
+
+# Save
+
+```{r}
+write_csv(
+  df_distr,  
+  file = file.path(output_data_dir, "climate_maln_viol_by_district.csv")
+)
+```
+
+```{r}
+write_csv(
+  df_reg,  
+  file = file.path(output_data_dir, "climate_maln_viol_by_region.csv")
+)
+```

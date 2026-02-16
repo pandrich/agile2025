@@ -1,3 +1,99 @@
+build_spei <- function(rast_spei, adm_shapes, start_date) {
+  print(paste0("Starting SPEI data processing"))
+  rast_times <- terra::time(rast_spei)
+  ids <- which(rast_times >= start_date)
+  rast_spei <- rast_spei %>% terra::subset(ids)
+  dates <- as.character(terra::time(rast_spei))
+  df_spei <- (
+    rast_spei
+    %>% exactextractr::exact_extract(
+      adm_shapes,
+      fun = "weighted_mean",
+      weights = "area",
+      max_cells_in_memory = 176067000,
+      append_cols = c("country", "adm_code", "adm_name"),
+      progress = FALSE
+    )
+  )
+  colnames(df_spei) <- c("country", "adm_code", "adm_name", dates)
+  df_spei <- (
+    df_spei
+    %>% pivot_longer(
+      cols = -c("country", "adm_code", "adm_name"),
+      names_to = "date",
+      values_to = "spei"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d")
+    )
+  )
+}
+
+build_weighted_spei_country <- function(
+    iso3, 
+    rast_spei, 
+    rast_pop, 
+    adm_pop,
+    adm_shapes, 
+    start_date, 
+    age_disag = FALSE
+) {
+  print(paste0("Starting processing SPEI data for: ", iso3))
+  if (age_disag) {
+    file_name = "age_weighted_spei_"
+  } else {
+    file_name = "weighted_spei_"
+  }
+  dfs_spei_times <- list()
+  rast_times <- terra::time(rast_spei)
+  ids <- which(rast_times >= start_date)
+  start_id <- ids[1]
+  rast_times <- rast_times[ids]
+  thresholds <- round(quantile(seq_along(rast_times), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  for (i in seq_along(rast_times)) {
+    if (i %in% thresholds) {
+      thresh_idx <- which(thresholds == i)
+      print(paste0(names(thresh_idx), " complete"))
+    }
+    rast_spei_time  <- (
+      rast_spei[[paste0("spei_", start_id + i - 1)]]
+      %>% terra::crop(terra::ext(unlist(coords[iso3])))
+    )
+    rast_spei_time_fine <- terra::resample(rast_spei_time, rast_pop)
+    rast_spei_weighted <- rast_spei_time_fine * rast_pop
+    dfs_spei_times[[i]] <- (
+      rast_spei_weighted
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+        max_cells_in_memory = 176067000,
+        append_cols = c("adm_code"),
+        progress = FALSE
+      )
+      %>% merge(
+        adm_pop,
+        by = "adm_code",
+        all.x = TRUE
+      )
+      %>% mutate(
+        date = as.Date(rast_times[[i]], format = "%Y-%m-%d"),
+        spei = (result / pop)
+      )
+    )
+  }
+  df_spei <- (
+    bind_rows(dfs_spei_times)
+    %>% select(-c(pop, result))
+    %>% mutate(
+      country = country_map[[iso3]]
+    )
+    %>% relocate(country)
+  )
+  df_spei %>% write_csv(file.path(proc_data_dir, paste0(file_name, iso3, ".csv")))
+  df_spei
+}
+
+
 calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
   if (weights != "") {
     variable_name = paste0(weights, "_", "utci_max")

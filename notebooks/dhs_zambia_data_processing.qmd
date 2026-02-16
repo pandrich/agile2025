@@ -1,0 +1,538 @@
+---
+title: "DHS Zambia Data Processing"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(readxl)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Analysis of the Uganda call centre data"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/DHS")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
+```
+
+
+# Functions
+
+```{r}
+# source(file.path(src_dir, "data_processing.R"))
+build_spei <- function(rast_spei, adm_shapes, start_date) {
+  print(paste0("Starting SPEI data processing"))
+  rast_times <- terra::time(rast_spei)
+  ids <- which(rast_times >= start_date)
+  rast_spei <- rast_spei %>% terra::subset(ids)
+  dates <- as.character(terra::time(rast_spei))
+  df_spei <- (
+    rast_spei
+    %>% exactextractr::exact_extract(
+      adm_shapes,
+      fun = "weighted_mean",
+      weights = "area",
+      max_cells_in_memory = 176067000,
+      append_cols = c("country", "adm1_name", "adm2_name"),
+      progress = FALSE
+    )
+  )
+  colnames(df_spei) <- c("country", "adm1_name", "adm2_name", dates)
+  df_spei <- (
+    df_spei
+    %>% pivot_longer(
+      cols = -c("country", "adm1_name", "adm2_name"),
+      names_to = "date",
+      values_to = "spei"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d")
+    )
+  )
+}
+
+calculate_spei_12m_stats <- function(df_spei) {
+  df_spei_12m <- (
+    df_spei
+    %>% mutate
+    %>% group_by(country, adm1_name, adm2_name)
+    %>% mutate(
+      hist_mean = mean(spei, na.rm = TRUE),
+      hist_sd = sd(spei, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (spei - hist_mean) / hist_sd,
+      below_1sd = as.numeric(sd_clim < -1),
+      below_m1 = as.numeric(spei < -1)
+    )
+    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, spei),
+        ~ (
+          slider::slide_index_dbl(
+            .x = (.),
+            .i = date,
+            .f = ~ sum(.x, na.rm = TRUE),
+            .before = ~ .x %m-% months(12),
+            .complete = TRUE
+          )
+        ),
+        .names = "{.col}_12m"
+      ),
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(below_m1_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = value - mean_value,
+      # dev_value = if_else(
+      #   sd_value == 0,
+      #   0,
+      #   (value - mean_value) / sd_value
+      # ),
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_spei_12m
+}
+```
+
+
+# Import Data
+
+## Geometries
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "zmb_admin_boundaries.shp",
+      "zmb_admin2.shp"
+    )
+  )
+  %>% select(
+    country = adm0_name,
+    adm1_name,
+    adm2_name
+  )
+)
+```
+
+
+## Geolocations
+
+```{r}
+sf_dhs_geo_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "DHS", "ZMGE81FL", "ZMGE81FL.shp")
+  )
+  %>% rename_with(str_to_lower)
+  %>% select(
+    cluster = dhsclust
+  )
+)
+```
+## Survey Data
+
+```{r}
+wealth_map <- c(
+  "poorest" = 1,
+  "poorer" = 2,
+  "middle" = 3,
+  "richer" = 4,
+  "richest" = 5
+)
+
+df_dhs_surv_zmb <- (
+  read_csv(
+    file.path(
+      raw_data_dir,
+      "DHS",
+      "data_from_Diana_2.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% mutate(
+    date = as.Date(
+      paste0(
+        year_of_interview,
+        sprintf("%02d", month_of_interview),
+        sprintf("%02d", day_of_interview)
+      ),
+      format = "%Y%m%d"
+    ),
+    date = lubridate::ceiling_date(date, unit = "month") - days(1),
+    female = if_else(
+      sex == "female",
+      1,
+      0
+    ),
+    rural = if_else(
+      residence_type == "rural",
+      1,
+      0
+    ),
+    wealth_quintile = wealth_map[wealth_quintile],
+    num_of_residence_years = as.numeric(case_when(
+      num_of_residence_years == "Always" ~ "100",
+      num_of_residence_years == "Visitor" ~ "0",
+      .default = num_of_residence_years
+    )),
+    years_since_sexual_debut = age_respondent - age_sexual_debut,
+    year_of_sexual_debut = year(date %m-% years(years_since_sexual_debut))
+  )
+  %>% select(
+    cluster = clustre_num,
+    date,
+    household = household_num,
+    weight = weight_household,
+    rural,
+    female,
+    age = age_respondent,
+    marital_status,
+    wealth_quintile,
+    num_of_residence_years,
+    age_sexual_debut,
+    years_since_sexual_debut,
+    year_of_sexual_debut
+  )
+)
+```
+
+```{r}
+(
+  ggplot(data =   df_dhs_surv_zmb)
+  + geom_histogram(
+    mapping = aes(
+      x = years_since_sexual_debut
+    )
+  )
+)
+```
+
+
+## SPEI
+
+Data obtained using the Climate Data Store API
+
+```{r}
+rast_spei <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "SPEI",
+    "spei01.nc"
+  )
+)
+```
+
+# Process Data
+
+## SPEI
+
+### Assign SPEI to admin areas
+
+```{r}
+df_spei <- build_spei(
+  rast_spei,
+  sf_zmb,
+  "1960-01-01"
+)
+```
+
+### Calculate 12 months rolling stats
+
+```{r}
+# df_spei_12m <- (
+#   df_spei
+#   %>% mutate(
+#     date = lubridate::ceiling_date(date, unit = "month") - days(1),
+#     # decade = round(year(date), digits = -1)
+#   )
+#   %>% filter(
+#     date >= "2000-01-01"
+#   )
+#   %>% group_by(country, adm1_name, adm2_name)
+#   %>% mutate(
+#     hist_mean = mean(spei, na.rm = TRUE),
+#     hist_sd = sd(spei, na.rm = TRUE)
+#   )
+#   %>% ungroup()
+#   %>% mutate(
+#     sd_clim = (spei - hist_mean) / hist_sd,
+#     below_1sd = as.numeric(sd_clim < -1),
+#     below_m1 = as.numeric(spei < -1)
+#   )
+#   %>% select(-c(hist_mean, hist_sd, sd_clim))
+#   %>% arrange(country, adm1_name, adm2_name, date)
+#   %>% group_by(country, adm1_name, adm2_name)
+#   %>% mutate(
+#     across(
+#       -c(date, spei),
+#       ~ (
+#         slider::slide_index_dbl(
+#           .x = (.),
+#           .i = date,
+#           .f = ~ sum(.x, na.rm = TRUE),
+#           .before = ~ .x %m-% months(12),
+#           .complete = TRUE
+#         )
+#       ),
+#       .names = "{.col}_12m"
+#     ),
+#   )
+#   %>% ungroup()
+#   %>% select(country, adm1_name, adm2_name, date, contains("12m"))
+#   %>% filter(!is.na(below_m1_12m))
+#   %>% pivot_longer(
+#     cols = -c(country, adm1_name, adm2_name, date),
+#     names_to = "variable",
+#     values_to = "value"
+#   )
+#   %>% group_by(country, adm1_name, adm2_name, variable)
+#   %>% mutate(
+#     mean_value = mean(value, na.rm = TRUE),
+#     sd_value = sd(value, na.rm = TRUE)
+#   )
+#   %>% ungroup()
+#   %>% mutate(
+#     dev_value = value - mean_value,
+#     # dev_value = if_else(
+#     #   sd_value == 0,
+#     #   0,
+#     #   (value - mean_value) / sd_value
+#     # ),
+#     variable = paste0("spei_", variable)
+#   )
+#   %>% filter(!is.na(value))
+#   %>% pivot_wider(
+#     id_cols = c(country, adm1_name, adm2_name, date),
+#     names_from = "variable",
+#     values_from = c(value, dev_value)
+#   )
+# )
+# ```
+# 
+# 
+# ## Geolocate respondents
+# 
+# ```{r}
+# df_dhs_adm_zmb <- (
+#   sf_zmb
+#   %>% st_join(
+#     sf_dhs_geo_zmb,
+#     join = st_contains,
+#     left = TRUE
+#   )
+#   %>% as.data.frame()
+#   %>% select(
+#     cluster,
+#     adm1_name,
+#     adm2_name
+#   )
+# )
+
+df_spei_12m <- (
+  df_spei
+  %>% mutate(
+    date = lubridate::ceiling_date(date, unit = "month") - days(1),
+    decade = round(year(date), digits = -1)
+  )
+  # %>% filter(
+  #   date >= "2000-01-01"
+  # )
+  %>% group_by(country, adm1_name, adm2_name, decade)
+  %>% mutate(
+    hist_mean = mean(spei, na.rm = TRUE),
+    hist_sd = sd(spei, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (spei - hist_mean) / hist_sd,
+    below_1sd = as.numeric(sd_clim < -1),
+    below_m1 = as.numeric(spei < -1)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim))
+  %>% arrange(country, adm1_name, adm2_name, date)
+  %>% group_by(country, adm1_name, adm2_name)
+  %>% mutate(
+    across(
+      -c(date, spei),
+      ~ (
+        slider::slide_index_dbl(
+          .x = (.),
+          .i = date,
+          .f = ~ sum(.x, na.rm = TRUE),
+          .before = ~ .x %m-% months(12),
+          .complete = TRUE
+        )
+      ),
+      .names = "{.col}_12m"
+    ),
+  )
+  %>% ungroup()
+  %>% select(country, adm1_name, adm2_name, date, contains("12m"))
+  %>% filter(!is.na(below_m1_12m))
+  %>% pivot_longer(
+    cols = -c(country, adm1_name, adm2_name, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(country, adm1_name, adm2_name, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = value - mean_value,
+    # dev_value = if_else(
+    #   sd_value == 0,
+    #   0,
+    #   (value - mean_value) / sd_value
+    # ),
+    variable = paste0("spei_", variable)
+  )
+  %>% filter(!is.na(value))
+  %>% pivot_wider(
+    id_cols = c(country, adm1_name, adm2_name, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+### Calculate yearly stats
+
+```{r}
+df_spei_yearly <- (
+  df_spei
+  %>% mutate(
+    year = year(date),
+    decade = round(year, digits = -1)
+  )
+  %>% group_by(country, adm1_name, adm2_name, decade)
+  %>% mutate(
+    hist_mean = mean(spei, na.rm = TRUE),
+    hist_sd = sd(spei, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (spei - hist_mean) / hist_sd,
+    below_1sd = as.numeric(sd_clim < -1),
+    below_m1 = as.numeric(spei < -1)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim))
+  %>% group_by(country, adm1_name, adm2_name, year)
+  %>% summarise(
+    mean_spei = mean(spei, na.rm = TRUE),
+    median_spei = median(spei, na.rm = TRUE),
+    spei_below_1sd_year = sum(below_1sd),
+    spei_below_m1_year = sum(below_m1),
+    .groups = "drop"
+  )
+  %>% ungroup()
+)
+```
+
+
+## Assign Admin areas to respondents
+
+```{r}
+df_dhs_surv_adm_zmb <- (
+  df_dhs_surv_zmb
+  %>% merge(
+    df_dhs_adm_zmb,
+    by = "cluster",
+    all.x = TRUE
+  )
+)
+```
+
+## Assign SPEI to respondent - Single time
+
+```{r}
+df_dhs_surv_adm_clim_zmb <- (
+  df_dhs_surv_adm_zmb
+  %>% merge(
+    df_spei_12m,
+    by = c("adm1_name", "adm2_name", "date"),
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+hist(df_dhs_surv_adm_clim_zmb$value_spei_below_1sd_12m)
+```
+
+
+```{r}
+colMeans(is.na(df_dhs_surv_adm_clim_zmb))
+```
+
+## Assign SPEI to respondent - Sexual Debut
+
+
+
+```{r}
+(
+  df_dhs_surv_adm_zmb
+  %>% filter(
+    num_of_residence_years > years_since_sexual_debut
+  )
+  %>% select(
+    adm1_name,
+    adm2_name,
+    weight,
+    rural,
+    female,
+    wealth_quintile,
+    year = year_of_sexual_debut,
+    age_sexual_debut
+  )
+  %>% merge(
+    df_spei_yearly,
+    by = c("adm1_name", "adm2_name", "year"),
+    all.x = TRUE
+  )
+)
+```
+

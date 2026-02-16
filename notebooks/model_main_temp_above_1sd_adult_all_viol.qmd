@@ -1,5 +1,5 @@
 ---
-title: "Model main UTCI effect on all sexual violence - adults"
+title: "Model main temperature effect on all sexual violence - adults"
 format: html
 editor: visual
 ---
@@ -40,7 +40,7 @@ src_dir <- root("src")
 
 ```{r}
 # Settings
-nb_name <-  "Model main UTCI effect on all sexual violence - adults"
+nb_name <-  "Model main temperature effect on all sexual violence - adults"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 set.seed(seed)
 
@@ -62,8 +62,8 @@ label_map <- c(
 )
 
 # Var settings
-clim_var <- "dev_value_pop_weighted_utci_max_above_32_12m"
-clim_label <- "utci_above_32"
+clim_var <- "dev_value_pop_weighted_temp_2m_max_above_1sd_12m"
+clim_label <- "temp_max_above_1sd"
 viol_var <- "sv"
 viol_label <- "all_viol"
 pop_label <- "adults"
@@ -214,6 +214,11 @@ sf_all <- (
     sf_zmb,
   )
   %>% st_transform(3857)
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = st_coordinates(centroid)[,1],
+    lat = st_coordinates(centroid)[,2]
+  )
 )
 ```
 
@@ -431,12 +436,6 @@ p6 <- (
   )
 )
 
-# (
-#   (p1 + p2) /
-#   (p3 + p4) /
-#   (p5 + p6)
-# )
-
 (
   (p1 + p2 + p3) /
   (p4 + p5 + p6)
@@ -478,7 +477,7 @@ df_model <- (
   )
   %>% select(all_of(vars))
   %>% na.omit()
-   %>% merge(
+  %>% merge(
     sf_vacs %>% as.data.frame() %>% select(country, adm_name, lon, lat),
     by = c("country", "adm_name"),
     all.x = TRUE
@@ -500,9 +499,6 @@ df_model <- (
   )
 )
 ```
-
-
-
 
 ## Generate adjacency matrix
 
@@ -748,15 +744,9 @@ ggsave(
 ##### Ordered factors
 
 ```{r}
-#| fig-width: 8
+#| fig-width: 6.5
 #| fig-height: 3
-(
-  plot_mono_marginal(fit_nonranef, df_model, covs = mono_covs)
-  + scale_y_continuous(
-    limits = c(0.045, 0.155),
-    labels = scales::percent_format(accuracy = 1)
-  )
-)
+plot_mono_marginal(fit_nonranef, df_model, covs = mono_covs)
 ggsave(
   path = fig_dir,
   filename = paste0("marginal_prob_mono_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_nonranef.png")
@@ -771,7 +761,7 @@ ggsave(
 (
   plot_continuous_marginal(fit_nonranef, df_model, covs = cont_covs)
   + scale_y_continuous(
-    limits = c(0.03, 0.3),
+    limits = c(0, 0.6),
     labels = scales::percent_format(accuracy = 1)
   )
 )
@@ -783,27 +773,11 @@ ggsave(
 
 #### Marginal Effects by Country
 
-##### Ordered factors
-
-```{r}
-#| fig-width: 8
-#| fig-height: 3.2
-(
-  plot_mono_marginal_by_group(fit_nonranef, df_model, covs = c("rel_age_ord", "school_level"), dodge = 0.6)
-  + theme(
-    legend.position = "top"
-  )
-)
-ggsave(
-  path = fig_dir,
-  filename = paste0("marginal_prob_mono_main_effect_by_country_", clim_label, "_", pop_label, "_", viol_label, "_nonranef.png")
-)
-```
 
 ##### Climate
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 12
 #| fig-height: 3
 plot_single_continuous_marginal_by_group(fit_nonranef, df_model, cov = "clim")
 ggsave(
@@ -853,13 +827,13 @@ ggsave(
 ### Posterior Predictive Checks
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 11
 #| fig-height: 2.5
 (
   plot_ppc_rootogram(fit_nonranef, df_model, outcome_var = viol_var)
   + theme(
     legend.position = "inside",
-    legend.position.inside = c(0.87, 0.8)
+    legend.position.inside = c(0.92, 0.8)
   )
 )
 ggsave(
@@ -1056,7 +1030,7 @@ ggsave(
 (
   plot_continuous_marginal(fit_ranint, df_model, covs = c("clim"))
   + scale_y_continuous(
-    limits = c(0.01, 0.3),
+    limits = c(0, 0.6),
     labels = scales::percent_format(accuracy = 1)
   )
 )
@@ -1205,7 +1179,9 @@ ggsave(
 )
 ```
 
-## No spatial correlation
+
+
+## Random Effects, No spatial correlation
 
 ```{r}
 stanvars <- stanvar(6, "num_pred")
@@ -1341,7 +1317,7 @@ ggsave(
 (
   plot_continuous_marginal(fit_ns, df_model, covs = c("clim"))
   + scale_y_continuous(
-    limits = c(0.01, 0.3),
+    limits = c(0, 0.6),
     labels = scales::percent_format(accuracy = 1)
   )
 )
@@ -1373,7 +1349,7 @@ ggsave(
 ##### Climate
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 12
 #| fig-height: 3
 plot_single_continuous_marginal_by_group(fit_ns, df_model, cov = "clim")
 ggsave(
@@ -1423,13 +1399,13 @@ ggsave(
 ### Posterior Predictive Checks
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 11
 #| fig-height: 2.5
 (
   plot_ppc_rootogram(fit_ns, df_model, outcome_var = viol_var)
   + theme(
     legend.position = "inside",
-    legend.position.inside = c(0.87, 0.8)
+    legend.position.inside = c(0.92, 0.8)
   )
 )
 ggsave(
@@ -1527,7 +1503,7 @@ ggsave(
 
 ```{r}
 #| fig-width: 4.1
-#| fig-height: 2.5
+#| fig-height: 3
 (
   ggplot(
     data = df_clim_ranef_plot_ns,
@@ -1584,10 +1560,10 @@ ggsave(
     axis.text.x = element_text(size = 15),
   )
   + scale_x_continuous(
-    limits = c(-0.9, 1.1)
+    limits = c(-0.75, 1.7)
   )
   + scale_y_discrete(
-      expand = expansion(mult = c(0.1, 0.35))
+      expand = expansion(mult = c(0.1, 0.25))
     )
   + labs(
     x = "Climate Posterior Term",
@@ -1628,6 +1604,7 @@ prior_list <- c(
 #       "(
 #         1
 #         + live_with_partner
+#         + tolerate_women_violence
 #         + rural
 #         + mo(rel_age_ord)
 #         + mo(school_level)
@@ -1646,7 +1623,7 @@ form <- bf(
       "| weights(sample_weight)",
       "~",
       "(
-        1
+        1 
         + live_with_partner
         + rural
         + mo(rel_age_ord)
@@ -1673,7 +1650,6 @@ fit <- brm(
 )
 ```
 
-
 ### Model Checks
 
 ```{r}
@@ -1689,8 +1665,8 @@ print(ebfmi_per_chain)
 mcmc_trace(
   as_draws_df(fit), 
   pars = c(
-    # "car",
-    # "sdcar",
+    # "car", 
+    # "sdcar", 
     # "rcar[1]"
     "sdgp_gplonlat",
     "lscale_gplonlat",
@@ -1702,8 +1678,6 @@ mcmc_trace(
 ```{r}
 #| fig-width: 12
 #| fig-height: 12
-
-
 bayesplot::mcmc_pairs(
   as.array(fit),
   pars = c(
@@ -1788,7 +1762,7 @@ fit
 ```{r}
 #| fig-width: 5
 #| fig-height: 3
-plot_baseline_levels(fit, lims = c(0, 0.55))
+plot_baseline_levels(fit, lims = c(0, 0.3))
 ```
 
 #### Marginal Effects
@@ -1810,13 +1784,7 @@ ggsave(
 ```{r}
 #| fig-width: 8
 #| fig-height: 3
-(
-  plot_mono_marginal(fit, df_model, covs = mono_covs)
-  + scale_y_continuous(
-    limits = c(0.015, 0.195),
-    labels = scales::percent_format(accuracy = 1)
-  )
-)
+plot_mono_marginal(fit, df_model, covs = mono_covs)
 ggsave(
   path = fig_dir,
   filename = paste0("marginal_prob_mono_main_effect_", clim_label, "_", pop_label, "_", viol_label, ".png")
@@ -1831,7 +1799,7 @@ ggsave(
 (
   plot_continuous_marginal(fit, df_model, covs = c("clim"))
   + scale_y_continuous(
-    limits = c(0.01, 0.3),
+    limits = c(0, 0.6),
     labels = scales::percent_format(accuracy = 1)
   )
 )
@@ -1863,7 +1831,7 @@ ggsave(
 ##### Climate
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 12
 #| fig-height: 3
 plot_single_continuous_marginal_by_group(fit, df_model, cov = "clim")
 ggsave(
@@ -1916,13 +1884,13 @@ ggsave(
 ### Posterior Predictive Checks
 
 ```{r}
-#| fig-width: 7.2
+#| fig-width: 11
 #| fig-height: 2.5
 (
   plot_ppc_rootogram(fit, df_model, outcome_var = viol_var)
   + theme(
     legend.position = "inside",
-    legend.position.inside = c(0.87, 0.82)
+    legend.position.inside = c(0.93, 0.82)
   )
 )
 ggsave(
@@ -2021,7 +1989,7 @@ ggsave(
 
 ```{r}
 #| fig-width: 4.1
-#| fig-height: 2.5
+#| fig-height: 3
 (
   ggplot(
     data = df_clim_ranef_plot,
@@ -2078,10 +2046,10 @@ ggsave(
     axis.text.x = element_text(size = 15),
   )
   + scale_x_continuous(
-    limits = c(-1.3, 1.1)
+    limits = c(-0.9, 1.4)
   )
   + scale_y_discrete(
-      expand = expansion(mult = c(0.1, 0.35))
+      expand = expansion(mult = c(0.1, 0.25))
     )
   + labs(
     x = "Climate Posterior Term",
@@ -2098,7 +2066,7 @@ ggsave(
 ### Check Spatial Component
 
 ```{r}
-df_sp_vars <- (
+df_car_vars <- (
   as_draws_df(
     fit,
     # variable = c("car", "sdcar")
@@ -2112,8 +2080,8 @@ df_sp_vars <- (
   )
 )
 
-df_sp_vars_stats <- (
-  df_sp_vars
+df_car_vars_stats <- (
+  df_car_vars
   %>% group_by(variable)
   %>% summarise(
     median = median(value, na.rm = T),
@@ -2130,7 +2098,7 @@ df_sp_vars_stats <- (
 #| fig-height: 2.5
 (
   ggplot(
-    data = df_sp_vars,
+    data = df_car_vars,
     mapping = aes(
       y = fct_reorder(variable, value, .fun = ~ -median(.)),
       x = value,
@@ -2265,6 +2233,11 @@ ggsave(
 # Compare Models
 
 ```{r}
+fit_nonranef <- add_criterion(
+  fit_nonranef, 
+  "loo",
+  # moment_match = TRUE
+)
 fit_ns <- add_criterion(
   fit_ns, 
   "loo",
@@ -2276,6 +2249,7 @@ fit <- add_criterion(
   # moment_match = TRUE
 )
 loo::loo_compare(
+  fit_nonranef,
   fit_ns,
   fit
 )
@@ -2283,6 +2257,7 @@ loo::loo_compare(
 
 ```{r}
 bind_rows(
+  get_calibration_scores(fit_nonranef, df_model, outcome_var = viol_var, model_name = "No random effects"),
   get_calibration_scores(fit_ns, df_model, outcome_var = viol_var, model_name = "No SAR"),
   get_calibration_scores(fit, df_model, outcome_var = viol_var, model_name = "Full Model")
 )
@@ -2397,8 +2372,7 @@ save(
   df_clim_viol
   %>% group_by(country, adm_name)
   %>% summarise(
-    range = max(date)-min(date),
-    .groups = "drop"
+    range = max(date)-min(date)
   )
 )
 ```

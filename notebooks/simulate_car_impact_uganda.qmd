@@ -39,56 +39,13 @@ src_dir <- root("src")
 ```{r}
 # Settings
 nb_name <-  "Test CAR effect with simulations"
-seed <- 686989 #sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+seed <- 4249093 #8098332 #sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 
-# Viz settings
+# Vis settings
 col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
-label_map <- c(
-  tolerate_women_violence = "Tolerate violence",
-  live_with_partner = "Live with partner",
-  live_with_father = "Live with father",
-  in_school = "In school",
-  school_level = "Schooling level",
-  work = "Has worked",
-  rural = "Rural area",
-  age = "Age",
-  rel_age_ord = "Excess Age (years)",
-  log_pop_density = "Population density",
-  clim = "Num. Excess Hot Days (past year)",
-  clim_stress = "Climate Stress"
-)
 
-# Var settings
-clim_var <- "dev_value_pop_weighted_utci_max_above_32_12m"
-clim_label <- "utci_above_32"
-viol_var <- "sv"
-viol_label <- "all_viol"
-pop_label <- "adults"
-covars <- c(
-  "sample_weight",
-  "country",
-  "adm_name",
-  "rural",
-  "age",
-  "school_level",
-  "live_with_partner",
-  "tolerate_women_violence",
-  viol_var
-)
-vars <- c(covars, clim_var)
-
-bin_covs <- c(
-  "rural",
-  "live_with_partner", 
-  "tolerate_women_violence"
-)
-mono_covs <- c(
-  "rel_age_ord",
-  "school_level"
-)
-cont_covs <- c(
-  "clim"
-)
+# Simulation settings
+N <- 8000
 
 # Computation settings
 adapt_delta = 0.95
@@ -106,128 +63,6 @@ inv_logit <- function(x) {
 ```
 
 # Import spatial data
-
-## Mozambique
-
-```{r}
-sf_moz <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
-  )
-  %>% st_make_valid()
-  %>% rename_with(tolower)
-  %>% select(
-    country = cntrynamee,
-    adm_name = dhsregen,
-    adm_code = regcode
-  )
-  %>% arrange(adm_code)
-)
-```
-
-## Zimbabwe
-
-```{r}
-sf_zwe <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
-  )
-  %>% st_make_valid()
-  %>% rename_with(tolower)
-  %>% select(
-    country = cntrynamee,
-    adm_name = dhsregen,
-    adm_code = regcode
-  )
-  %>% arrange(adm_code)
-)
-```
-
-## Lesotho
-
-```{r}
-sf_lso <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
-  )
-  %>% st_make_valid()
-  %>% rename_with(tolower)
-  %>% select(
-    country = cntrynamee,
-    adm_name = dhsregen,
-    adm_code = regcode
-  )
-  %>% arrange(adm_code)
-)
-```
-
-## Namibia
-
-```{r}
-sf_nam <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
-  )
-  %>% st_make_valid()
-  %>% rename_with(tolower)
-  %>% select(
-    country = cntrynamee,
-    adm_name = dhsregen,
-    adm_code = regcode
-  )
-  %>% arrange(adm_code)
-)
-```
-
-## Zambia
-
-```{r}
-sf_zmb <- (
-  st_read(
-    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
-  )
-  %>% st_make_valid()
-  %>% rename_with(tolower)
-  %>% select(
-    country = cntrynamee,
-    adm_name = dhsregen,
-    adm_code = regcode
-  )
-  %>% arrange(adm_code)
-)
-```
-
-## Create combined shapes
-
-```{r}
-sf_all <- (
-  bind_rows(
-    sf_moz,
-    sf_zwe,
-    sf_lso,
-    sf_nam,
-    sf_zmb,
-  )
-  %>% st_transform(3857)
-  %>% mutate(
-    centroid = st_centroid(geometry),
-    lon = st_coordinates(centroid)[,1],
-    lat = st_coordinates(centroid)[,2]
-  )
-  %>% filter(adm_name != "Inhambane")
-  %>% mutate(
-    adm_code = row_number()
-  )
-  %>% select(
-    country,
-    adm_name,
-    adm_code,
-  )
-)
-sf_all$adm_code <- factor(as.character(sf_all$adm_code), levels = as.character(seq(1, nrow(sf_all))))
-```
-
-## Uganda
 
 ```{r}
 sf_uga <- (
@@ -313,7 +148,8 @@ form_with_u <- bf(sv ~ 1 + clim + u + (1 | adm_code))
 
 prior_list_only_sp <- c(
   prior(normal(-1, 0.5), class = "Intercept"),
-  prior(normal(0, 0.5), class = "rhocar"),
+  # prior(normal(0, 0.5), class = "rhocar"),
+  prior(normal(0, 0.5), class = "car"),
   prior(exponential(1), class = "sdcar")
 )
 
@@ -323,7 +159,8 @@ form_only_sp <- bf(
     + car(
       W, 
       gr = adm_code, 
-      type = "bym2"
+      # type = "bym2"
+      type = "escar"
     )
   )
 )
@@ -331,7 +168,8 @@ form_only_sp <- bf(
 prior_list_sp <- c(
   prior(normal(-1, 0.5), class = "Intercept"),
   prior(normal(0, 1), class = "b"),
-  prior(normal(0, 0.5), class = "rhocar"),
+  # prior(normal(0, 0.5), class = "rhocar"),
+  prior(normal(0, 0.5), class = "car"),
   # prior(student_t(3, 0, 1), class = "sdcar")
   prior(exponential(1), class = "sdcar")
 )
@@ -343,7 +181,8 @@ form_sp <- bf(
     + car(
       W, 
       gr = adm_code, 
-      type = "bym2"
+      # type = "bym2"
+      type = "escar"
     )
   )
 )
@@ -355,11 +194,10 @@ form_sp <- bf(
 
 ```{r}
 set.seed(seed)
-N <- 8000    # data points
 n_loc <- nrow(sf_uga)  # locations
 clim_adm <- rnorm(n_loc, 0, 1)
 alpha <- -1
-b_clim <- 2
+b_clim <- 0.2
 
 loc <- vector("integer", length = N)
 clim <- vector("numeric", length = N)
@@ -456,10 +294,10 @@ fit_sp_1 <- brm(
   data2 = list(W = W),
   seed = seed,
   refresh = 1000,
-  # control = list(
-  #   adapt_delta = 0.99,
-  #   max_treedepth = 15
-  # ),
+  control = list(
+    adapt_delta = 0.99,
+    max_treedepth = 15
+  ),
   # sample_prior = "only"
   # sample_prior = TRUE
 )
@@ -516,11 +354,107 @@ print(ebfmi_per_chain)
 ```
 
 ```{r}
-mcmc_trace(as_draws_df(fit_sp_1), pars = c("rhocar", "sdcar", "rcar[1]"))
+mcmc_trace(as_draws_df(fit_sp_1), pars = c("car", "sdcar", "rcar[1]"))
 ```
 
 ```{r}
 fit_sp_1
+```
+
+### Compare Models
+
+```{r}
+clim_draws_ns_1 <- (
+  as_draws_df(fit_ns_1)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "No spatial terms"
+  )
+)
+
+clim_draws_adm_1 <- (
+  as_draws_df(fit_adm_1)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "Adm level intercept"
+  )
+)
+
+clim_draws_sp_1 <- (
+  as_draws_df(fit_sp_1)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "With CAR"
+  )
+)
+
+clim_draws_1 <- (
+  bind_rows(clim_draws_ns_1, clim_draws_adm_1, clim_draws_sp_1)
+  %>% mutate(
+    model = factor(model, levels = c("No spatial terms", "Adm level intercept", "With CAR")
+    )
+  )
+)
+```
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 4.5
+(
+  ggplot(
+    data = clim_draws_1,
+    mapping = aes(
+      x = clim,
+    )
+  )
+  + stat_dotsinterval(
+    quantiles = 100,
+    slab_color = col_palette[3],
+    slab_fill = col_palette[4],
+    .width = c(0.5, 0.95),
+  )
+  # + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+  + facet_wrap(
+    ~model,
+    ncol = 1,
+    scales = "free_y",
+    # strip.position = "left"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    axis.ticks.y = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    strip.background = element_blank(),
+    # strip.placement = "outside",
+    strip.text = element_text(size = 15)
+  )
+  + labs(
+    x = "Posterior Value",
+    title = "Sim: No spatial correlation"
+  )
+  + scale_y_discrete(
+    expand = expansion(mult = c(0.2, 0.75))
+  )
+  # + scale_x_continuous(
+  #   limits = c(-0.1, 1.8)
+  # )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "clim_post_no_sp_sim_uga.png"
+)
 ```
 
 # Flexible climate for admin area, no SAR
@@ -529,7 +463,6 @@ fit_sp_1
 
 ```{r}
 set.seed(seed)
-N <- 8000    # data points
 n_loc <- nrow(sf_uga)  # locations
 clim_adm <- rnorm(n_loc, 0, 1)
 alpha <- -1
@@ -670,7 +603,7 @@ print(ebfmi_per_chain)
 ```
 
 ```{r}
-mcmc_trace(as_draws_df(fit_sp_2), pars = c("rhocar", "sdcar", "rcar[1]"))
+mcmc_trace(as_draws_df(fit_sp_2), pars = c("car", "sdcar", "rcar[1]"))
 ```
 
 ```{r}
@@ -686,8 +619,8 @@ set.seed(seed)
 
 # Parameters
 n_loc <- nrow(W)
-N <- 50  # number of individual responders per location (we simplify by taking the same number everywhere)
-adm_code <- rep(1:n_loc, each = N) # we create a vector of admin areas representing the location of the individual responders 
+n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
+adm_code <- rep(1:n_loc, each = n_ind) # we create a vector of admin areas representing the location of the individual responders 
 
 beta_uc <- 0.4    # effect of the unobserved variable on climate
 clim_noise_sd <- 0.7
@@ -706,7 +639,8 @@ Sigma_u <- sigma2_u * solve(Q)
 u_adm <- MASS::mvrnorm(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
 
 # Climate variable dependent on confounder (here we also assume that this is the same for all people in the same area)
-clim_adm <- beta_uc * u_adm + rnorm(n_loc, 0, clim_noise_sd)
+clim_adm <- matrix(beta_uc * u_adm + rnorm(n_loc, 0, clim_noise_sd), nrow = 1)
+rownames(clim_adm) <- "clim"
 
 # Individual level data
 u <- u_adm[adm_code]
@@ -726,14 +660,14 @@ df_sim_3 <- (
   %>% arrange(adm_code)
 )
 
-sf_clim_3 <- bind_cols(sf_uga, clim_adm)
+sf_clim_3 <- bind_cols(sf_uga, t(clim_adm))
 ```
 
 ```{r}
 (
   ggplot(data = sf_clim_3)
   + geom_sf(
-    aes(fill = ...4),
+    aes(fill = clim),
     color = "black",
     linewidth = 0.1
   )
@@ -896,66 +830,187 @@ print(ebfmi_per_chain)
 ```
 
 ```{r}
-mcmc_trace(as_draws_df(fit_sp_3), pars = c("rhocar", "sdcar", "rcar[1]"))
+mcmc_trace(as_draws_df(fit_sp_3), pars = c("car", "sdcar", "rcar[1]"))
 ```
 
 ```{r}
 fit_sp_3
 ```
 
+### Compare Models
+
+```{r}
+clim_draws_ns_3 <- (
+  as_draws_df(fit_ns_3)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "No spatial terms"
+  )
+)
+
+clim_draws_adm_3 <- (
+  as_draws_df(fit_adm_3)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "Adm level intercept"
+  )
+)
+
+clim_draws_sp_3 <- (
+  as_draws_df(fit_sp_3)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "With CAR"
+  )
+)
+
+clim_draws_3 <- (
+  bind_rows(clim_draws_ns_3, clim_draws_adm_3, clim_draws_sp_3)
+  %>% mutate(
+    model = factor(model, levels = c("No spatial terms", "Adm level intercept", "With CAR")
+    )
+  )
+)
+```
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 4.5
+(
+  ggplot(
+    data = clim_draws_3,
+    mapping = aes(
+      x = clim,
+    )
+  )
+  + stat_dotsinterval(
+    quantiles = 100,
+    slab_color = col_palette[3],
+    slab_fill = col_palette[4],
+    .width = c(0.5, 0.95),
+  )
+  + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+  + facet_wrap(
+    ~model,
+    ncol = 1,
+    scales = "free_y",
+    # strip.position = "left"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    axis.ticks.y = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    strip.background = element_blank(),
+    # strip.placement = "outside",
+    strip.text = element_text(size = 15)
+  )
+  + labs(
+    x = "Posterior Value",
+    title = "Sim: unobserved confounder"
+  )
+  + scale_y_discrete(
+    expand = expansion(mult = c(0.2, 0.75))
+  )
+  # + scale_x_continuous(
+  #   limits = c(-0.1, 1.8)
+  # )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "clim_post_conf_sim_uga.png"
+)
+```
+
 # Separate spatially correlated climate and violence
 
 ## Simulation
 
-```{r}
-# Parameters
-# 
-# seed_new <- sample.int(1E7, size = 1)
-# set.seed(seed_new)
+### Select seed
 
-# n_loc <- nrow(W)
-# N <- 50
-# adm_code <- rep(1:n_loc, each = N)
+```{r, message = FALSE, warning = FALSE, results = "hide"}
 # 
-# beta_uc <- 0.4
-# clim_noise_sd <- 0.7
+# num_tries <- 50
+# test_seeds <- vector(mode = "integer", length = num_tries)
+# test_clim <- vector(mode = "integer", length = num_tries)
 # 
-# alpha_sv <- -1
-# beta_us <- 2
+# for (i in 1:num_tries) {
+#   seed <- sample.int(1E7, size = 1)
+#   test_seeds[[i]] <- seed
+#   set.seed(seed)
 # 
-# # Build CAR precision matrix
-# D <- diag(rowSums(W))
-# rho_true <- 0.85
-# sigma2 <- 1.0
-# Q <- D - rho_true * W  
+#   n_loc <- nrow(W)
+#   n_ind <- N %/% n_loc
+#   adm_code <- rep(1:n_loc, each = n_ind)
 # 
-# # Build unobserved confounder
-# Sigma <- sigma2 * solve(Q)
+#   # CAR precision matrix
+#   D <- diag(rowSums(W))
+#   rho_true <- 0.85
+#   sigma2 <- 1.0
+#   Q <- D - rho_true * W
+#   Sigma <- sigma2 * solve(Q)
 # 
-# u_adm <- MASS::mvrnorm(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+#   # Climate variable
+#   clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+#   rownames(clim_adm) <- "clim"
 # 
-# # build clim variable
-# clim_adm <- MASS::mvrnorm(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+#   # Sexual violence risk factor
+#   logit_p_sv_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
 # 
-# # Individual level data
-# u <- u_adm[adm_code]
-# clim <- clim_adm[adm_code]
+#   # Individual level data
+#   clim <- clim_adm[adm_code]
+#   logit_p_sv <- logit_p_sv_adm[adm_code]
 # 
-# # Generate sexual violence data
-# logit_p_sv <- alpha_sv + beta_us * u
-# sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
+#   # Generate sexual violence data
+#   sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
 # 
-# df_sim_3 <- (
-#   tibble(
-#     adm_code = factor(as.character(adm_code)),
-#     clim = clim,
-#     u = u,
-#     sv = sv
+#   df_sim <- (
+#     tibble(
+#       adm_code = factor(as.character(adm_code)),
+#       clim = clim,
+#       sv = sv
+#     )
+#     %>% arrange(adm_code)
 #   )
-#   %>% arrange(adm_code)
-# )
 # 
-# sf_clim_3 <- bind_cols(sf_uga, clim_adm)
+#   fit_ns <- brm(
+#     formula = form_ns,
+#     family = bernoulli("logit"),
+#     prior = prior_list_ns,
+#     data = df_sim,
+#     data2 = list(W = W),
+#     seed = seed,
+#     refresh = 0,
+#     silent = TRUE
+#   )
+# 
+#   summ <- summary(fit_ns)
+#   test_clim[[i]] <- summ$fixed[2,]$Estimate
+# }
+  
+```
+
+```{r}
+# hist(test_clim)
+```
+
+```{r}
+# test_seeds[which.max(test_clim)]
+```
+
+```{r}
+# test_seeds[which.min(abs(test_clim - 0.2))]
 ```
 
 ```{r}
@@ -965,8 +1020,8 @@ fit_sp_3
 set.seed(seed)
 
 n_loc <- nrow(W)
-N <- 50
-adm_code <- rep(1:n_loc, each = N)
+n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
+adm_code <- rep(1:n_loc, each = n_ind)
 
 # CAR precision matrix
 D <- diag(rowSums(W))
@@ -977,6 +1032,7 @@ Sigma <- sigma2 * solve(Q)
 
 # Climate variable
 clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
+rownames(clim_adm) <- "clim"
 
 # Sexual violence risk factor
 logit_p_sv_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma)
@@ -1004,7 +1060,7 @@ sf_clim_4 <- bind_cols(sf_uga, t(clim_adm))
 (
   ggplot(data = sf_clim_4)
   + geom_sf(
-    aes(fill = ...4),
+    aes(fill = clim),
     color = "black",
     linewidth = 0.1
   )
@@ -1149,9 +1205,105 @@ print(ebfmi_per_chain)
 ```
 
 ```{r}
-mcmc_trace(as_draws_df(fit_sp_4), pars = c("rhocar", "sdcar", "rcar[1]"))
+mcmc_trace(as_draws_df(fit_sp_4), pars = c("car", "sdcar", "rcar[1]"))
 ```
 
 ```{r}
 fit_sp_4
+```
+
+### Compare Models
+
+```{r}
+clim_draws_ns_4 <- (
+  as_draws_df(fit_ns_4)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "No spatial terms"
+  )
+)
+
+clim_draws_adm_4 <- (
+  as_draws_df(fit_adm_4)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "Adm level intercept"
+  )
+)
+
+clim_draws_sp_4 <- (
+  as_draws_df(fit_sp_4)
+  %>% select(clim = b_clim)
+  %>% mutate(
+    model = "With CAR"
+  )
+)
+
+clim_draws_4 <- (
+  bind_rows(clim_draws_ns_4, clim_draws_adm_4, clim_draws_sp_4)
+  %>% mutate(
+    model = factor(model, levels = c("No spatial terms", "Adm level intercept", "With CAR")
+    )
+  )
+)
+```
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 4.5
+(
+  ggplot(
+    data = clim_draws_4,
+    mapping = aes(
+      x = clim,
+    )
+  )
+  + stat_dotsinterval(
+    quantiles = 100,
+    slab_color = col_palette[3],
+    slab_fill = col_palette[4],
+    .width = c(0.5, 0.95),
+  )
+  + geom_vline(xintercept = 0, linetype = "dashed", color = "gray50")
+  + facet_wrap(
+    ~model,
+    ncol = 1,
+    scales = "free_y",
+    # strip.position = "left"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 16),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(size = 15),
+    axis.ticks.y = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 13),
+    strip.background = element_blank(),
+    # strip.placement = "outside",
+    strip.text = element_text(size = 15)
+  )
+  + labs(
+    x = "Posterior Value",
+    title = "Sim: independent spatial corr."
+  )
+  + scale_y_discrete(
+    expand = expansion(mult = c(0.2, 0.75))
+  )
+  # + scale_x_continuous(
+  #   limits = c(-0.1, 1.8)
+  # )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = "clim_post_ind_sp_sim_uga.png"
+)
 ```

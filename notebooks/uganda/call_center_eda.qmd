@@ -1,0 +1,198 @@
+---
+title: "Call Centre Data Exploration"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(readxl)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Analysis of the Uganda call centre data"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/uganda")
+fig_dir <- root("figures")
+src_dir <- root("src")
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
+```
+
+
+# Functions
+
+```{r}
+clean_col_name <- function(col) {
+  col <- str_to_lower(col)
+  col <- gsub(" ", "_", col)
+  col <- str_trim(col)
+  col <- gsub("[^A-z0-9]", "", col)
+  col
+}
+
+clean_not_in_school_reason <- function(r) {
+  r <- str_to_lower(r)
+  r <- gsub("[^A-z0-9 ]", "", r)
+  r <- str_trim(r)
+  r
+}
+```
+
+
+# Load Data
+
+## Geometries
+
+```{r}
+sf_uga <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "uganda_herbert",
+      "uganda_districts.shp"
+    ),
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    district = case_match(
+      district,
+      "KASSNDA" ~ "Kassanda",
+      "NAMUTUNMBA" ~ "Namutumba",
+      .default = str_to_title(district)
+    ),
+    district_area = shape_area / 1000
+  )
+  %>% select(
+    district_code = objectid,
+    district,
+    district_area
+  )
+  %>% st_transform(4326)
+)
+```
+
+## Call centre data
+
+```{r}
+df_cc_2014 <- (
+  read_xlsx(
+    path = file.path(raw_data_dir, "uganda/SAUTI/2014-2015_Data_Sexual_Violence-_Children(1).xlsx"),
+    sheet = "Sheet1"
+  )
+)
+
+df_cc_2016 <- (
+  read_xlsx(
+    path = file.path(raw_data_dir, "uganda/SAUTI/2016 to 2018 Sexual Violence data- children.xlsx"),
+    sheet = "Sheet1"
+  )
+)
+
+df_cc_2019 <- (
+  read_xlsx(
+    path = file.path(raw_data_dir, "uganda/SAUTI/2019 t0 2021 Data sexual Violence- children.xlsx"),
+    sheet = "Sheet1"
+  )
+)
+
+df_cc_2021 <- (
+  read_xlsx(
+    path = file.path(raw_data_dir, "uganda/SAUTI/2021 to 30th Dec 2025 data Sexual Violence- Children.xlsx"),
+    sheet = "Sheet1"
+  )
+  %>% rename_with(clean_col_name)
+  %>% mutate(
+    report_relationship_to_client = case_when(
+      str_detect(report_relationship_to_client, "Not a Friend") ~ "Peer, not a friend",
+      str_detect(report_relationship_to_client, "Not related") ~ "Other, not related",
+      .default = report_relationship_to_client
+    ),
+    perp_relationship_with_client = case_when(
+      str_detect(perp_relationship_with_client, "Not a Friend") ~ "Peer, not a friend",
+      str_detect(perp_relationship_with_client, "Not related") ~ "Other, not related",
+      str_detect(perp_relationship_with_client, "Househelp") ~ "Househelp",
+      .default = perp_relationship_with_client
+    ),
+    client_disabled = case_when(
+      client_isdisability == "Yes" ~ 1,
+      client_isdisability == "No" ~ 0,
+      .default = NA
+    ),
+    client_in_school = case_when(
+      client_in_school == "Yes" ~ 1,
+      client_in_school == "No" ~ 0,
+      .default = NA
+    ),
+    perp_shares_home = case_when(
+      perp_shares_home == "Yes" ~ 1,
+      perp_shares_home == "Sometimes" ~ 0.5,
+      perp_shares_home == "No" ~ 0,
+      .default = NA
+    ),
+    refered_for_special_services = case_when(
+      refered_for_special_services == "Yes" ~ 1,
+      refered_for_special_services == "No" ~ 0,
+      .default = NA
+    )
+  )
+  %>% rowwise()
+  %>% mutate(
+    client_not_in_school_reason = clean_not_in_school_reason(client_not_in_school_reason)
+  )
+  %>% mutate(
+    across(where(is.character), ~ str_to_lower(.)),
+    across(
+      where(is.character),
+      (
+        ~ if (is.na(.)) {
+         NA
+       } else if (str_detect(., "unknown") | str_detect(., "unkown")) {
+         NA
+       } else {
+         .
+       }
+      )
+    )
+  )
+  # Remove columns that are uniquely missing or that are all the same
+  %>% select(
+    -c(
+      sub_category_2, 
+      sub_category_3,
+      client_registered_for_special_services,
+      client_is_married,
+      client_is_guardian_known,
+      referals,
+      client_reason_for_not_attending_school,
+      case_type,
+      main_category,
+      client_isdisability
+    )
+  )
+)
+```
+
+# Viz
+
+```{r}
+(
+  df_cc_2021
+  %>% group_by(client_district)
+  %>% summarise(
+    mean_client_age = mean(client_age, na.rm = TRUE),
+    median_client_age = median(client_age, na.rm = TRUE),
+```
+
