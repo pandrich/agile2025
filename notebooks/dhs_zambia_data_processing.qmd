@@ -227,12 +227,16 @@ df_dhs_surv_zmb <- (
     rural,
     female,
     age = age_respondent,
+    education,
     marital_status,
     wealth_quintile,
     num_of_residence_years,
     age_sexual_debut,
     years_since_sexual_debut,
-    year_of_sexual_debut
+    year_of_sexual_debut,
+    num_sex_partners,
+    condom_last_sex,
+    ever_hiv_tested
   )
 )
 ```
@@ -496,6 +500,7 @@ df_dhs_surv_adm_clim_zmb <- (
     by = c("adm1_name", "adm2_name", "date"),
     all.x = TRUE
   )
+  %>% select(-c(country, years_since_sexual_debut, year_of_sexual_debut))
 )
 ```
 
@@ -507,6 +512,13 @@ hist(df_dhs_surv_adm_clim_zmb$value_spei_below_1sd_12m)
 ```{r}
 colMeans(is.na(df_dhs_surv_adm_clim_zmb))
 ```
+
+### Save
+
+```{r}
+write_csv(df_dhs_surv_adm_clim_zmb, file = file.path(proc_data_dir, "dhs_climate_zmb.csv"))
+```
+
 
 ## Assign SPEI to respondent - Sexual Debut
 
