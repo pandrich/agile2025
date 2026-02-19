@@ -20,7 +20,6 @@ library(bayesplot)
 library(tidybayes)
 library(patchwork)
 library(tidytext)
-library(reliabilitydiag)
 
 # Folder Structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
@@ -45,7 +44,7 @@ seed <- 3953168 #7392034 2602313 # #sum(sapply(str_split(nb_name, pattern = "", 
 col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
 
 # Simulation settings
-N <- 8000
+N <- 5000
 
 # Computation settings
 adapt_delta = 0.95
@@ -136,7 +135,7 @@ sf_nam <- (
 )
 ```
 
-## Zambia
+admin\_## Zambia
 
 ```{r}
 sf_zmb <- (
@@ -184,7 +183,6 @@ sf_all <- (
 sf_all$adm_code <- factor(as.character(sf_all$adm_code), levels = as.character(seq(1, nrow(sf_all))))
 ```
 
-
 # Adjacency matrix
 
 ```{r}
@@ -225,7 +223,6 @@ cent <- (
 )
 ```
 
-
 # Model parts
 
 ```{r}
@@ -257,44 +254,56 @@ prior_list_with_u <- c(
 form_with_u <- bf(sv ~ 1 + clim + u + (1 | adm_code))
 
 prior_list_only_sp <- c(
-  prior(normal(-1, 0.5), class = "Intercept"),
+  prior(normal(-1, 0.5), class = "Intercept")
   # prior(normal(0, 0.5), class = "rhocar"),
-  prior(normal(0, 0.5), class = "car"),
-  prior(exponential(1), class = "sdcar")
+  # prior(normal(0, 0.5), class = "car"),
+  # prior(exponential(1), class = "sdcar")
 )
 
 form_only_sp <- bf(
   sv ~ (
     1 
-    # + gp(x1, x2, k = 10, cov = "matern32", gr = TRUE)
-    + car(
-      W,
-      gr = adm_code,
-      # type = "bym2"
-      type = "escar"
+    + gp(
+      x1, 
+      x2, 
+      # k = 10, 
+      cov = "matern32", 
+      gr = TRUE
     )
+    # + car(
+    #   W,
+    #   gr = adm_code,
+    #   # type = "bym2"
+    #   type = "escar"
+    # )
   )
 )
 
 prior_list_sp <- c(
   prior(normal(-1, 0.5), class = "Intercept"),
-  prior(normal(0, 1), class = "b"),
+  prior(normal(0, 1), class = "b")
   # prior(normal(0, 0.5), class = "rhocar"),
-  prior(normal(0, 0.5), class = "car"),
-  prior(exponential(1), class = "sdcar")
+  # prior(normal(0, 0.5), class = "car"),
+  # prior(exponential(1), class = "sdcar")
 )
 
 form_sp <- bf(
   sv ~ (
     1 
     + clim 
-    # + gp(x1, x2, k = 10, cov = "matern32", gr = TRUE)
-    + car(
-      W,
-      gr = adm_code,
-      # type = "bym2"
-      type = "escar"
+    + gp(
+      x1, 
+      x2, 
+      # k = 10, 
+      cov = "matern32", 
+      gr = TRUE
     )
+    # + car(
+    #   W,
+    #   gr = adm_code,
+    #   # type = "bym2"
+    #   type = "escar"
+    # )
   )
 )
 ```
@@ -390,9 +399,6 @@ fit_ns_1 <- brm(
 ```{r}
 fit_ns_1
 ```
-
-
-
 
 ### With only admin level random effects
 
@@ -526,7 +532,6 @@ mcmc_trace(
 fit_sp_1
 ```
 
-
 ### Compare Models
 
 ```{r}
@@ -622,7 +627,6 @@ ggsave(
   filename = "clim_post_no_sp_sim_multi_country.png"
 )
 ```
-
 
 # Flexible climate for admin area, no SAR
 
@@ -1241,7 +1245,6 @@ hist(test_clim)
 # test_seeds[which.min(abs(test_clim - 0.2))]
 ```
 
-
 ```{r}
 # Parameters
 # 
@@ -1571,7 +1574,6 @@ ggsave(
 )
 ```
 
-
 # Spatially correlated climate directly affecting violence
 
 ## Simulation
@@ -1585,7 +1587,7 @@ n_loc <- nrow(W)
 n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
 adm_code <- rep(1:n_loc, each = n_ind)
 alpha_sv <- -1    # sexual violence intercept
-beta_cs <- 0.4      # effect of climate on sexual violence
+beta_cs <- 0.2      # effect of climate on sexual violence
 
 # CAR precision matrix
 # D <- diag(rowSums(W))
@@ -1595,8 +1597,8 @@ beta_cs <- 0.4      # effect of climate on sexual violence
 # Sigma <- sigma2 * solve(Q)
 
 # GP Covariance matrix
-gp_sigma <- 0.8
-gp_lambda <- 3
+gp_sigma <- 3
+gp_lambda <- 0.5
 d_mat <- as.matrix(dist(cent))
 r <- sqrt(3) * (d_mat / gp_lambda)
 Sigma <- (gp_sigma ** 2) * (1 + r) * exp(-r)
@@ -1789,12 +1791,12 @@ print(ebfmi_per_chain)
 mcmc_trace(
   as_draws_df(fit_sp_5), 
   pars = c(
-    "car",
-    "sdcar",
-    "rcar[1]"
-    # "sdgp_gpx1x2",
-    # "lscale_gpx1x2",
-    # "zgp_gpx1x2[1]"
+    # "car",
+    # "sdcar",
+    # "rcar[1]"
+    "sdgp_gpx1x2",
+    "lscale_gpx1x2",
+    "zgp_gpx1x2[1]"
   )
 )
 ```
@@ -1903,17 +1905,234 @@ ggsave(
 
 ## Simulation
 
+### Select seed
+
+```{r, message = FALSE, warning = FALSE, results = "hide"}
+
+# Parameters
+
+# num_tries <- 50
+# test_seeds <- vector(mode = "integer", length = num_tries)
+# test_clim <- vector(mode = "integer", length = num_tries)
+# 
+# for (i in 1:num_tries) {
+#   seed <- sample.int(1E7, size = 1)
+#   test_seeds[[i]] <- seed
+#   set.seed(seed)
+# 
+#   n_loc <- nrow(W)
+#   n_ind <- N %/% n_loc
+#   adm_code <- rep(1:n_loc, each = n_ind)
+# 
+#   beta_us <- 0.8    # effect of the unobserved variable on sexual violence
+#   alpha_sv <- -1    # sexual violence intercept
+#   beta_cs <- 0.2      # effect of the climate variable on sexual violence
+# 
+#   # GP Covariance matrices
+#   d_mat <- as.matrix(dist(cent))
+#   # gp_sigma_x <- 0.6
+#   # gp_sigma_y <- 0.7
+#   # gp_sigma_u <- 0.5
+#   # 
+#   # gp_lambda_x <- 1
+#   # gp_lambda_y <- 0.4
+#   # 
+#   # r_x <- sqrt(3) * (d_mat / gp_lambda_x)
+#   # r_y <- sqrt(3) * (d_mat / gp_lambda_y)
+#   # 
+#   # Sigma_x <- (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x)
+#   # Sigma_y <- (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
+#   # Sigma_u <- (gp_sigma_u ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
+#   # 
+#   # # Climate variable
+#   # # Unobserved confounder (there is just one of this that applies to all the individual data)
+#   # u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
+#   # 
+#   # # Climate variable not dependent on confounder (here we also assume that this is the same for all people in the same area)
+#   # clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = (Sigma_x + Sigma_y))
+#   # rownames(clim_adm) <- "clim"
+#   gp_sigma_c <- 0.6
+#   gp_sigma_x <- 0.7
+#   gp_sigma_y <- 0.5
+#   
+#   gp_lambda_x <- 1.5
+#   gp_lambda_y <- 0.4
+#   
+#   r_x <- sqrt(3) * (d_mat / gp_lambda_x)
+#   r_y <- sqrt(3) * (d_mat / gp_lambda_y)
+#   
+#   Sigma_c <- (gp_sigma_c ** 2) * (1 + r_x) * exp(-r_x)
+#   Sigma_u <- (
+#     (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
+#     + (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
+#   )
+#   
+#   
+#   # Unobserved confounder (there is just one of this that applies to all the individual data)
+#   u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
+#   
+#   # Climate variable not dependent on confounder (here we also assume that this is the same for all people in the same area)
+#   clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_c)
+#   rownames(clim_adm) <- "clim"
+# 
+#   # Individual level data
+#   x1 <- cent[["lon"]][adm_code]
+#   x2 <- cent[["lat"]][adm_code]
+#   u <- u_adm[adm_code]
+#   clim <- clim_adm[adm_code]
+# 
+#   # Sexual violence data
+#   logit_p_sv <- alpha_sv + beta_cs * clim + beta_us * u # Sexual violence depends on climate AND the unobserved variable
+#   sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
+# 
+#   df_sim <- (
+#     tibble(
+#       adm_code = factor(as.character(adm_code)),
+#       x1 = x1,
+#       x2 = x2,
+#       clim = clim,
+#       u = u,
+#       sv = sv
+#     )
+#     %>% arrange(adm_code)
+#   )
+# 
+#   fit_ns <- brm(
+#     formula = form_ns,
+#     family = bernoulli("logit"),
+#     prior = prior_list_ns,
+#     data = df_sim,
+#     data2 = list(W = W),
+#     seed = seed,
+#     refresh = 0,
+#     silent = TRUE
+#   )
+# 
+#   summ <- summary(fit_ns)
+#   test_clim[[i]] <- summ$fixed[2,]$Estimate
+# }
+  
+```
+
 ```{r}
-set.seed(seed)
+# hist(test_clim)
+```
+
+```{r}
+# test_seeds[which.max(test_clim)]
+```
+
+```{r}
+# test_seeds[which.min(abs(test_clim - 0.05))]
+```
+# Interesting seeds
+
+```{r}
+# seeds that show true value without spatial correlation but decreases with spatial correlation and has higher uncertainty
+238906  #6379400
+
+# seeds that show higher than true value without spatial correlation but decreases with spatial correlation ans has higher uncertainty
+2648093   #7191423
+
+# seeds that show lower than true value without spatial correlation but increases with spatial correlation and has higher uncertainty
+1386701  #5588511
+```
+
+
+```{r}
+# set.seed(6379400)
+# 
+# # Parameters
+# n_loc <- nrow(W)
+# n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
+# adm_code <- rep(1:n_loc, each = n_ind) # we vector of admin areas representing the location of the individual responders 
+# 
+# beta_us <- 0.8    # effect of the unobserved variable on sexual violence
+# alpha_sv <- -1    # sexual violence intercept
+# beta_cs <- 0.2      # effect of the climate variable on sexual violence
+# 
+# # CAR precision matrix
+# # D <- diag(rowSums(W))
+# # rho_true <- 0.95
+# # sigma2_u <- 0.2
+# # Q <- D - rho_true * W
+# # Sigma_u <- sigma2_u * solve(Q)
+# 
+# # GP Covariance matrices
+# # We have two covariance components, one shared by the covariate and confounder
+# d_mat <- as.matrix(dist(cent))
+# gp_sigma_x <- 0.6
+# gp_sigma_y <- 0.7
+# gp_sigma_u <- 0.5
+# 
+# gp_lambda_x <- 1
+# gp_lambda_y <- 0.4
+# 
+# r_x <- sqrt(3) * (d_mat / gp_lambda_x)
+# r_y <- sqrt(3) * (d_mat / gp_lambda_y)
+# 
+# Sigma_x <- (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x)
+# Sigma_y <- (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
+# Sigma_u <- (gp_sigma_u ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
+# 
+# 
+# # Unobserved confounder (there is just one of this that applies to all the individual data)
+# u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
+# 
+# # Climate variable not dependent on confounder (here we also assume that this is the same for all people in the same area)
+# clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = (Sigma_x + Sigma_y))
+# rownames(clim_adm) <- "clim"
+# 
+# # Individual level data
+# x1 <- cent[["lon"]][adm_code]
+# x2 <- cent[["lat"]][adm_code]
+# u <- u_adm[adm_code]
+# clim <- clim_adm[adm_code]
+# 
+# # Sexual violence data
+# logit_p_sv <- alpha_sv + beta_cs * clim + beta_us * u # Sexual violence depends on climate AND the unobserved variable
+# sv <- rbinom(length(logit_p_sv), size = 1, prob = inv_logit(logit_p_sv))
+# 
+# df_sim_6 <- (
+#   tibble(
+#     adm_code = factor(as.character(adm_code)),
+#     x1 = x1,
+#     x2 = x2,
+#     clim = clim,
+#     u = u,
+#     sv = sv
+#   )
+#   %>% arrange(adm_code)
+# )
+# 
+# sf_clim_6 <- bind_cols(sf_data, t(clim_adm))
+# sf_sv_6 <- (
+#   sf_data
+#   %>% merge(
+#     (
+#       df_sim_6
+#       %>% group_by(adm_code)
+#       %>% summarise(
+#         sv = mean(sv)
+#       )
+#       %>% ungroup()
+#       %>% select(adm_code, sv)
+#     ),
+#     by = "adm_code",
+#     all.x = TRUE
+#   )
+# )
+
+set.seed(238906)
 
 # Parameters
 n_loc <- nrow(W)
 n_ind <- N %/% n_loc  # number of individual responders per location (we simplify by taking the same number everywhere)
 adm_code <- rep(1:n_loc, each = n_ind) # we vector of admin areas representing the location of the individual responders 
 
-beta_us <- 0.5    # effect of the unobserved variable on sexual violence
+beta_us <- 0.8    # effect of the unobserved variable on sexual violence
 alpha_sv <- -1    # sexual violence intercept
-beta_cs <- 0.7      # effect of the climate variable on sexual violence
+beta_cs <- 0.2      # effect of the climate variable on sexual violence
 
 # CAR precision matrix
 # D <- diag(rowSums(W))
@@ -1923,15 +2142,24 @@ beta_cs <- 0.7      # effect of the climate variable on sexual violence
 # Sigma_u <- sigma2_u * solve(Q)
 
 # GP Covariance matrices
+# We have two covariance components, one shared by the covariate and confounder
 d_mat <- as.matrix(dist(cent))
-gp_sigma_u <- 0.1
-gp_lambda_u <- 2
-gp_sigma_c <- 0.3
-gp_lambda_c <- 1
-r_u <- sqrt(3) * (d_mat / gp_lambda_u)
-r_c <- sqrt(3) * (d_mat / gp_lambda_c)
-Sigma_u <- (gp_sigma_u ** 2) * (1 + r_u) * exp(-r_u)
-Sigma_c <- (gp_sigma_c ** 2) * (1 + r_c) * exp(-r_c)
+gp_sigma_c <- 0.6
+gp_sigma_x <- 0.7
+gp_sigma_y <- 0.5
+
+gp_lambda_x <- 1.5
+gp_lambda_y <- 0.4
+
+r_x <- sqrt(3) * (d_mat / gp_lambda_x)
+r_y <- sqrt(3) * (d_mat / gp_lambda_y)
+
+Sigma_c <- (gp_sigma_c ** 2) * (1 + r_x) * exp(-r_x)
+Sigma_u <- (
+  (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
+  + (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
+)
+
 
 # Unobserved confounder (there is just one of this that applies to all the individual data)
 u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
@@ -2190,12 +2418,12 @@ print(ebfmi_per_chain)
 mcmc_trace(
   as_draws_df(fit_sp_6), 
   pars = c(
-    "car",
-    "sdcar",
-    "rcar[1]"
-    # "sdgp_gpx1x2",
-    # "lscale_gpx1x2",
-    # "zgp_gpx1x2[1]"
+    # "car",
+    # "sdcar",
+    # "rcar[1]"
+    "sdgp_gpx1x2",
+    "lscale_gpx1x2",
+    "zgp_gpx1x2[1]"
   )
 )
 ```
@@ -2290,7 +2518,7 @@ clim_draws_6 <- (
     expand = expansion(mult = c(0.2, 0.75))
   )
   + scale_x_continuous(
-    limits = c(-0.3, 0.85)
+    limits = c(-0.8, 0.85)
   )
 )
 
