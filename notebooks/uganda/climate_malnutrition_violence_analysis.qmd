@@ -20,6 +20,7 @@ seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8
 
 # Folder structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
 proc_data_dir <- root("data/processed/uganda")
 fig_dir <- root("figures")
 
@@ -177,7 +178,6 @@ sf_uga <- (
 )
 ```
 
-
 ## DHIS2
 
 ```{r}
@@ -223,7 +223,7 @@ vars <- cols[str_detect(cols, "maln") & !str_detect(cols, "lag")]
 ```
 
 ```{r}
-mean_corrs_reg <-  get_mean_corrs_multi_var(df_reg_an, vars = vars, level = "region")
+mean_corrs_reg <-  get_mean_corrs_multi_var(df_reg_corr, vars = vars, level = "region")
 ```
 
 ```{r}
@@ -296,6 +296,8 @@ y <- "dev_value_maln_cases_12m_per_1000"
 #### Single climate factor
 
 ```{r}
+regions <- unique(df_reg_corr$region)
+n_regions <- length(regions)
 corr_spei_maln_reg <- list()
 for (i in 1:n_regions) {
   df_corr <- (
@@ -601,7 +603,7 @@ for (i in 1:nrow(df_corr_viol_reg)) {
   / (p[[3]] + p[[4]])
   / (p[[5]] + p[[6]])
   / (p[[7]] + p[[8]])
-  / (p[[9]] + p[[10]])
+  / (p[[9]])
 )
 ```
 
@@ -725,7 +727,6 @@ df_corr_reg
   )
 )
 ```
-
 
 # Viz
 
@@ -1174,8 +1175,8 @@ ggsave(
   )
   + scale_x_discrete(
     labels = setNames(
-      utci_centers,
-      utci_lvls
+      utci_centers_viol_clim,
+      utci_lvls_viol_clim
     )
   )
   + paletteer::scale_color_paletteer_d(
@@ -1426,7 +1427,7 @@ df_distr_year_plot <- (
     size = 3
   )
   + geom_text(
-    data = subset(df_distr_year_maln_plot, (mean_maln_2024 - mean_maln_2022) < -0.45),
+    data = subset(df_distr_year_plot, (mean_maln_2024 - mean_maln_2022) < -0.45),
     mapping = aes(
       x = mean_maln_2022,
       y = mean_maln_2024 + 0.1,
@@ -1532,6 +1533,11 @@ df_distr_year_plot <- (
     color = "none"
   )
 )
+
+ggsave(
+  path = fig_dir,
+  filename = "viol_2022_vs_2024.png"
+)
 ```
 
 ### Over time
@@ -1553,13 +1559,12 @@ viol_distr_to_plot <- (
   df_distr_year_plot
   %>% filter(
     ((mean_viol_2024 - mean_viol_2022) > 0.4)
-    | ((mean_viol_2024 - mean_viol_2022) < -0.12)
+    # | ((mean_viol_2024 - mean_viol_2022) < -0.12)
   )
   %>% distinct(district)
   %>% pull(district)
 )
 ```
-
 
 ```{r}
 #| fig-width: 9
@@ -1615,11 +1620,12 @@ viol_distr_to_plot <- (
   
     
 ```
+
 All districts with the largest reduction are in Karamoja.
 
 ```{r}
-#| fig-width: 9
-#| fig-height: 5
+#| fig-width: 10
+#| fig-height: 3
 (
   df_distr
   %>% filter(
@@ -1647,8 +1653,8 @@ All districts with the largest reduction are in Karamoja.
   )
   + facet_wrap(
     ~district,
-    scales = "free_y",
-    ncol = 3
+    # scales = "free_y",
+    nrow = 1,
   )
   + theme(
     panel.background = element_blank(),
@@ -1668,9 +1674,15 @@ All districts with the largest reduction are in Karamoja.
     y = "Change in Violence\n(cases per 1000)",
     color = "District"
   )
+  + guides(
+    color = "none"
+  )
 )
   
-    
+ggsave(
+  path = fig_dir,
+  filename = "violence_over_time_largest_increases.png"
+)
 ```
 
 # Maps

@@ -805,6 +805,7 @@ plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[
 
 ## Temperature in country
 
+
 ```{r}
 rast_temp_moz <- rast_temp %>% terra::crop(terra::vect(sf_moz %>% st_union()))
 rast_times <- terra::time(rast_temp_moz)
@@ -860,7 +861,7 @@ ggsave(
 ## Downsample one time step
 
 ```{r}
-rast_temp_fine_moz <- terra::resample(rast_temp_moz[[1]], rast_pop_moz_2022)
+rast_temp_fine_moz <- terra::resample(rast_temp_moz[[1]], rast_pop_moz)
 ```
 
 ```{r}
@@ -916,7 +917,7 @@ ggsave(
 ## Population scaled temperature
 
 ```{r}
-rast_temp_weighted_moz <- rast_temp_fine_moz * rast_pop_moz_2022
+rast_temp_weighted_moz <- rast_temp_fine_moz * rast_pop_moz
 ```
 
 ```{r}
@@ -926,7 +927,7 @@ rast_temp_weighted_moz <- rast_temp_fine_moz * rast_pop_moz_2022
 p1 <- (
   ggplot()
   + geom_spatraster(
-    data = rast_pop_moz_2022 %>% terra::crop(plot_extent),
+    data = rast_pop_moz %>% terra::crop(plot_extent),
     mapping = aes(fill = pop)
   )
   + scale_fill_paletteer_c(
@@ -1027,7 +1028,7 @@ df_temp_daily_moz <- (
     progress = FALSE
   )
   %>% merge(
-    adm_pop_moz_2022,
+    adm_pop_moz,
     by = "adm_code",
     all.x = TRUE
   )
@@ -1105,43 +1106,43 @@ df_temp <- build_temp_daily(rast_temp, sf_all)
 ### Mozambique
 
 ```{r}
-df_weighted_temp_moz <- build_weighted_temp_daily_country("MOZ", country_map, rast_temp, rast_pop_moz_2022, adm_pop_moz_2022, sf_moz)
+df_weighted_temp_moz <- build_weighted_temp_daily_country("MOZ", country_map, rast_temp, rast_pop_moz, adm_pop_moz, sf_moz)
 ```
 
 ### Zimbabwe
 
 ```{r}
-df_weighted_temp_zwe <- build_weighted_temp_daily_country("ZWE", country_map, rast_temp, rast_pop_zwe_2022, adm_pop_zwe_2022, sf_zwe)
+df_weighted_temp_zwe <- build_weighted_temp_daily_country("ZWE", country_map, rast_temp, rast_pop_zwe, adm_pop_zwe, sf_zwe)
 ```
 
 ### Lesotho
 
 ```{r}
-df_weighted_temp_lso <- build_weighted_temp_daily_country("LSO", country_map, rast_temp, rast_pop_lso_2022, adm_pop_lso_2022, sf_lso)
+df_weighted_temp_lso <- build_weighted_temp_daily_country("LSO", country_map, rast_temp, rast_pop_lso, adm_pop_lso, sf_lso)
 ```
 
 ### Namibia
 
 ```{r}
-df_weighted_temp_nam <- build_weighted_temp_daily_country("NAM", country_map, rast_temp, rast_pop_nam_2022, adm_pop_nam_2022, sf_nam)
+df_weighted_temp_nam <- build_weighted_temp_daily_country("NAM", country_map, rast_temp, rast_pop_nam, adm_pop_nam, sf_nam)
 ```
 
 ### Zambia
 
 ```{r}
-df_weighted_temp_zmb <- build_weighted_temp_daily_country("ZMB", country_map, rast_temp, rast_pop_zmb_2022, adm_pop_zmb_2022, sf_zmb)
+df_weighted_temp_zmb <- build_weighted_temp_daily_country("ZMB", country_map, rast_temp, rast_pop_zmb, adm_pop_zmb, sf_zmb)
 ```
 
 ### Uganda
 
 ```{r}
-df_weighted_temp_uga <- build_weighted_temp_daily_country("UGA", country_map, rast_temp, rast_pop_uga_2022, adm_pop_uga_2022, sf_uga)
+df_weighted_temp_uga <- build_weighted_temp_daily_country("UGA", country_map, rast_temp, rast_pop_uga, adm_pop_uga, sf_uga)
 ```
 
 ### Kenya
 
 ```{r}
-df_weighted_temp_ken <- build_weighted_temp_daily_country("KEN", country_map, rast_temp, rast_pop_ken_2022, adm_pop_ken_2022, sf_ken)
+df_weighted_temp_ken <- build_weighted_temp_daily_country("KEN", country_map, rast_temp, rast_pop_ken, adm_pop_ken, sf_ken)
 ```
 
 ## Girl Population Weighted Temperature

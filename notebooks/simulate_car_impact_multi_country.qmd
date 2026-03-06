@@ -294,7 +294,7 @@ form_sp <- bf(
     + gp(
       x1, 
       x2, 
-      # k = 10, 
+      # k = 10,
       cov = "matern32", 
       gr = TRUE
     )
@@ -1924,53 +1924,53 @@ ggsave(
 #   n_ind <- N %/% n_loc
 #   adm_code <- rep(1:n_loc, each = n_ind)
 # 
-#   beta_us <- 0.8    # effect of the unobserved variable on sexual violence
+#   beta_us <- 0.5    # effect of the unobserved variable on sexual violence
 #   alpha_sv <- -1    # sexual violence intercept
-#   beta_cs <- 0.2      # effect of the climate variable on sexual violence
+#   beta_cs <- 0.25      # effect of the climate variable on sexual violence
 # 
 #   # GP Covariance matrices
 #   d_mat <- as.matrix(dist(cent))
 #   # gp_sigma_x <- 0.6
 #   # gp_sigma_y <- 0.7
 #   # gp_sigma_u <- 0.5
-#   # 
+#   #
 #   # gp_lambda_x <- 1
 #   # gp_lambda_y <- 0.4
-#   # 
+#   #
 #   # r_x <- sqrt(3) * (d_mat / gp_lambda_x)
 #   # r_y <- sqrt(3) * (d_mat / gp_lambda_y)
-#   # 
+#   #
 #   # Sigma_x <- (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x)
 #   # Sigma_y <- (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
 #   # Sigma_u <- (gp_sigma_u ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
-#   # 
+#   #
 #   # # Climate variable
 #   # # Unobserved confounder (there is just one of this that applies to all the individual data)
 #   # u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
-#   # 
+#   #
 #   # # Climate variable not dependent on confounder (here we also assume that this is the same for all people in the same area)
 #   # clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = (Sigma_x + Sigma_y))
 #   # rownames(clim_adm) <- "clim"
 #   gp_sigma_c <- 0.6
 #   gp_sigma_x <- 0.7
 #   gp_sigma_y <- 0.5
-#   
+# 
 #   gp_lambda_x <- 1.5
 #   gp_lambda_y <- 0.4
-#   
+# 
 #   r_x <- sqrt(3) * (d_mat / gp_lambda_x)
 #   r_y <- sqrt(3) * (d_mat / gp_lambda_y)
-#   
+# 
 #   Sigma_c <- (gp_sigma_c ** 2) * (1 + r_x) * exp(-r_x)
 #   Sigma_u <- (
 #     (gp_sigma_x ** 2) * (1 + r_x) * exp(-r_x) # same structure of Sigma_x
 #     + (gp_sigma_y ** 2) * (1 + r_y) * exp(-r_y)
 #   )
-#   
-#   
+# 
+# 
 #   # Unobserved confounder (there is just one of this that applies to all the individual data)
 #   u_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_u)
-#   
+# 
 #   # Climate variable not dependent on confounder (here we also assume that this is the same for all people in the same area)
 #   clim_adm <- rmulti_normal(n = 1, mu = rep(0, n_loc), Sigma = Sigma_c)
 #   rownames(clim_adm) <- "clim"
@@ -2015,7 +2015,7 @@ ggsave(
 ```
 
 ```{r}
-# hist(test_clim)
+hist(test_clim)
 ```
 
 ```{r}
@@ -2023,16 +2023,16 @@ ggsave(
 ```
 
 ```{r}
-# test_seeds[which.min(abs(test_clim - 0.05))]
+test_seeds[which.min(abs(test_clim - 0.5))]
 ```
-# Interesting seeds
+### Interesting seeds
 
 ```{r}
 # seeds that show true value without spatial correlation but decreases with spatial correlation and has higher uncertainty
 238906  #6379400
 
 # seeds that show higher than true value without spatial correlation but decreases with spatial correlation ans has higher uncertainty
-2648093   #7191423
+8403986 #2648093   #7191423
 
 # seeds that show lower than true value without spatial correlation but increases with spatial correlation and has higher uncertainty
 1386701  #5588511
@@ -2123,7 +2123,7 @@ ggsave(
 #   )
 # )
 
-set.seed(238906)
+set.seed(8403986)
 
 # Parameters
 n_loc <- nrow(W)
@@ -2132,7 +2132,7 @@ adm_code <- rep(1:n_loc, each = n_ind) # we vector of admin areas representing t
 
 beta_us <- 0.8    # effect of the unobserved variable on sexual violence
 alpha_sv <- -1    # sexual violence intercept
-beta_cs <- 0.2      # effect of the climate variable on sexual violence
+beta_cs <- 0.25      # effect of the climate variable on sexual violence
 
 # CAR precision matrix
 # D <- diag(rowSums(W))
@@ -2210,6 +2210,8 @@ sf_sv_6 <- (
 ```
 
 ```{r}
+#| fig-width: 4
+#| fig-height: 4
 (
   ggplot(data = sf_clim_6)
   + geom_sf(
@@ -2217,7 +2219,9 @@ sf_sv_6 <- (
     color = "black",
     linewidth = 0.1
   )
-  + scale_fill_viridis_c()
+  + scale_fill_viridis_c(
+    option = "magma"
+  )
   + theme(
     panel.background = element_blank(),
     panel.grid = element_blank(),
@@ -2227,13 +2231,13 @@ sf_sv_6 <- (
     axis.ticks = element_blank(),
     legend.background = element_blank(),
     legend.text = element_text(size = 14),
-    legend.title = element_blank(),
+    legend.title = element_text(size = 16),
     legend.position = "inside",
     legend.position.inside = c(0.8, 0.2)
   )
-  # + labs(
-  #   fill = "Climate Variable"
-  # )
+  + labs(
+    fill = "clim"
+  )
 )
 
 ggsave(
@@ -2243,6 +2247,8 @@ ggsave(
 ```
 
 ```{r}
+#| fig-width: 4
+#| fig-height: 4
 (
   ggplot(data = sf_sv_6)
   + geom_sf(
@@ -2260,9 +2266,12 @@ ggsave(
     axis.ticks = element_blank(),
     legend.background = element_blank(),
     legend.text = element_text(size = 14),
-    legend.title = element_blank(),
+    legend.title = element_text(size = 16),
     legend.position = "inside",
     legend.position.inside = c(0.8, 0.2)
+  )
+  + labs(
+    fill = "sv"
   )
 )
 
@@ -2358,7 +2367,7 @@ fit_sp_6 <- brm(
   data2 = list(W = W),
   seed = seed,
   refresh = 1000,
-  # control = list(adapt_delta = adapt_delta)
+  control = list(adapt_delta = adapt_delta)
 )
 ```
 
@@ -2439,7 +2448,7 @@ clim_draws_ns_6 <- (
   as_draws_df(fit_ns_6)
   %>% select(clim = b_clim)
   %>% mutate(
-    model = "No spatial terms"
+    model = "No Spatial Corr."
   )
 )
 
@@ -2447,7 +2456,7 @@ clim_draws_adm_6 <- (
   as_draws_df(fit_adm_6)
   %>% select(clim = b_clim)
   %>% mutate(
-    model = "Adm level intercept"
+    model = "Adm. Level Intercept"
   )
 )
 
@@ -2455,22 +2464,22 @@ clim_draws_sp_6 <- (
   as_draws_df(fit_sp_6)
   %>% select(clim = b_clim)
   %>% mutate(
-    model = "With spatial corr."
+    model = "With Spatial Corr."
   )
 )
 
 clim_draws_6 <- (
   bind_rows(clim_draws_ns_6, clim_draws_adm_6, clim_draws_sp_6)
   %>% mutate(
-    model = factor(model, levels = c("No spatial terms", "Adm level intercept", "With spatial corr.")
+    model = factor(model, levels = c("No Spatial Corr.", "Adm. Level Intercept", "With Spatial Corr.")
     )
   )
 )
 ```
 
 ```{r}
-#| fig-width: 2.5
-#| fig-height: 4.5
+#| fig-width: 3.5
+#| fig-height: 5.5
 (
   ggplot(
     data = clim_draws_6,
@@ -2512,14 +2521,14 @@ clim_draws_6 <- (
   )
   + labs(
     x = "Posterior Value",
-    # title = "Sim: unobserved confounder"
+    title = "Sim: unobserved confounder"
   )
   + scale_y_discrete(
     expand = expansion(mult = c(0.2, 0.75))
   )
-  + scale_x_continuous(
-    limits = c(-0.8, 0.85)
-  )
+  # + scale_x_continuous(
+  #   limits = c(-0.8, 0.85)
+  # )
 )
 
 ggsave(
