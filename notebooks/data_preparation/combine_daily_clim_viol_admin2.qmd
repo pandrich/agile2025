@@ -1,0 +1,232 @@
+---
+title: "Combine climate data, food prices, and violence data - admin2"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+model_data_dir <- root(proc_data_dir, "model_data")
+dir.create(model_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+viol_file <- sort(list.files(file.path(proc_data_dir, "VACS_clean"), pattern = "vacs_clean", full.names = TRUE), decreasing = TRUE)[[1]]
+
+# Settings
+nb_name <-  "Build final dataset"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+```{r}
+print(paste("Using violence file:", viol_file))
+```
+
+# Import data
+
+## Climate
+
+The dataset contains entries for each day (note that the SPEI data occurs only once a month as it is on a monthly basis). To match it with the violence data we calculate the mean over all the entries in each month. This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
+
+```{r}
+df_clim <- (
+  read_csv(
+    file.path(proc_data_dir, "processed_utci_temp_spei_daily_admin2.csv"),
+    show_col_types = FALSE
+  )
+  %>% group_by(
+    country,
+    adm_code,
+    adm_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    across(everything(), ~ mean(., na.rm = TRUE)),
+    .groups = "drop"
+  )
+  %>% mutate(
+    adm_name = case_when(
+      adm_name == "Beitbridge" ~ "Beitbridge Rural",
+      adm_name == "Bindura" ~ "Bindura Rural",
+      adm_name == "Centenary/ Muzarabani" ~ "Centenary",
+      adm_name == "Chegutu" ~ "Chegutu Rural",
+      adm_name == "Chipinge" ~ "Chipinge Rural",
+      adm_name == "Chiredzi" ~ "Chiredzi Rural",
+      adm_name == "Chiredzi Urban" ~ "Chiredzi Town",
+      adm_name == "Gokwe South Urban" ~ "Gokwe Centre",
+      adm_name == "Gwanda" ~ "Gwanda Rural",
+      adm_name == "Gweru" ~ "Gweru Rural",
+      adm_name == "Kwekwe" ~ "Kwekwe Rural",
+      adm_name == "Marondera" ~ "Marondera Rural",
+      adm_name == "Marondera Urban" ~ "Marondera",
+      adm_name == "Masvingo" ~ "Masvingo Rural",
+      adm_name == "Mhondoro-Ngezi" ~ "Mhondoro Ngezi",
+      adm_name == "Mount Darwin" ~ "Mt Darwin",
+      adm_name == "Mutare" ~ "Mutare Rural",
+      adm_name == "Shurugwi" ~ "Shurugwi Rural",
+      adm_name == "Shurugwi Town" ~ "Shurugwi Urban",
+      adm_name == "Uzumba Maramba Pfungwe" ~ "Ump",
+      adm_name == "Victoria Falls" ~ "Vic Falls",
+      adm_name == "Zvishavane" ~ "Zvishavane Rural",
+      adm_name == "Zvishavane Urban" ~ "Zvishavane",
+      .default = adm_name
+    )
+  )
+  %>% rename(
+    adm2_code = adm_code,
+    adm2_name = adm_name
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol_zwe <- (
+  read_csv(
+    viol_file,
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country == "Zimbabwe",
+    !is.na(date),
+  )
+  %>% select(
+    -c(adm1_code, adm2_code)
+  )
+  %>% mutate(
+    date = ceiling_date(as.Date(date, format = "%Y-%m-%d"), "month") - days(1)
+  )
+)
+```
+
+```{r}
+df_viol_zmb <- (
+  read_csv(
+    viol_file,
+    show_col_types = FALSE
+  )
+  %>% filter(
+    country == "Zambia",
+    !is.na(date),
+  )
+  %>% select(
+    -c(adm1_code, adm2_name)
+  )
+  %>% mutate(
+    date = ceiling_date(as.Date(date, format = "%Y-%m-%d"), "month") - days(1)
+  )
+)
+```
+
+# Combine datasets
+
+## Zimbabwe
+
+```{r}
+df_clim_viol_zwe <- (
+  df_viol_zwe
+  %>% merge(
+    df_clim %>% filter(country == "Zimbabwe"),
+    by = c("country", "adm2_name", "date"),
+    all.x = TRUE
+  )
+  %>% select(-adm2_code)
+  %>% relocate(
+    adm1_name,
+    .after = "country"
+  )
+)
+```
+
+```{r}
+adm_names_clim <- sort(unique(df_clim %>% filter(country == "Zimbabwe") %>% pull(adm2_name)))
+adm_names_viol <- sort(unique(df_viol_zwe$adm2_name))
+sort(setdiff(adm_names_viol, adm_names_clim))
+```
+
+## Zambia
+
+```{r}
+df_clim_viol_zmb <- (
+  df_viol_zmb
+  %>% merge(
+    df_clim %>% filter(country == "Zambia"),
+    by = c("country", "adm2_code", "date"),
+    all.x = TRUE
+  )
+  %>% select(-adm2_code)
+  %>% relocate(
+    c(adm1_name, adm2_name),
+    .before = "date"
+  )
+)
+```
+
+```{r}
+adm_codes_clim <- sort(unique(df_clim %>% filter(country == "Zambia") %>% pull(adm2_code)))
+adm_codes_viol <- sort(unique(df_viol_zmb$adm2_code))
+sort(setdiff(adm_codes_viol, adm_codes_clim))
+```
+
+## Combine
+
+```{r}
+df_clim_viol <- bind_rows(df_clim_viol_zwe, df_clim_viol_zmb)
+```
+
+```{r}
+(
+  df_clim_viol
+  %>% filter(is.na(value_utci_max_above_1sd_12m))
+)
+```
+
+```{r}
+col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
+(
+  ggplot(
+    data = df_clim_viol, 
+    aes(
+      x = dev_value_utci_max_above_32_12m,
+      fill = country
+    )
+  )
+  + geom_histogram(
+    position = "stack"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_manual(
+    values = col_palette
+  )
+)
+```
+
+# Save
+
+```{r}
+df_clim_viol %>% filter(!is.na(adm2_name)) %>% write_csv(file.path(model_data_dir, "climate_violence_admin2.csv"))
+```

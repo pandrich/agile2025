@@ -501,9 +501,6 @@ df_model <- (
 )
 ```
 
-
-
-
 ## Generate adjacency matrix
 
 ```{r}
@@ -601,7 +598,6 @@ bayesplot::mcmc_pairs(
   )
 )
 ```
-
 
 ```{r}
 plot(fit_nonranef, variable = "^b_rural", regex = TRUE, nvariables = 3)
@@ -728,8 +724,6 @@ df_base_sv_by_country_nonranef_stats <- (
   )
 ) 
 ```
-
-
 
 #### Marginal Effects
 
@@ -1612,11 +1606,11 @@ prior_list <- c(
   prior(exponential(1/0.3), class = "sd"),
   prior(dirichlet(1), class = "simo", coef = "morel_age_ord1"),
   prior(dirichlet(1), class = "simo", coef = "moschool_level1"),
-  prior(student_t(3, 0, 0.5), class = "lscale", coef = "gplonlat"),
-  prior(student_t(3, 0, 2), class = "sdgp")
+  # prior(student_t(3, 0, 0.5), class = "lscale", coef = "gplonlat"),
+  # prior(student_t(3, 0, 2), class = "sdgp")
   # prior(normal(0, 0.3), class = "rhocar"),
-  # prior(normal(0, 0.3), class = "car"),
-  # prior(exponential(1/0.05), class = "sdcar")
+  prior(beta(1, 1), class = "car"),
+  prior(exponential(1), class = "sdcar")
 )
 
 # form <- bf(
@@ -1626,17 +1620,22 @@ prior_list <- c(
 #       "| weights(sample_weight)",
 #       "~",
 #       "(
-#         1
+#         1 
 #         + live_with_partner
 #         + rural
 #         + mo(rel_age_ord)
 #         + mo(school_level)
 #         + clim
 #         + (1 + clim | country)
-#         + car(W, gr = adm_name, type = 'escar')
+#         + gp(
+#             lon, 
+#             lat, 
+#             cov = 'matern32', 
+#             k = 10,
+#             gr = TRUE
+#         )
 #       )"
 #     )
-#     #
 #   )
 # )
 form <- bf(
@@ -1653,7 +1652,7 @@ form <- bf(
         + mo(school_level)
         + clim
         + (1 + clim | country)
-        + gp(lon, lat, k = 10, cov = 'matern32', gr = TRUE)
+        + car(W, gr = adm_name, type = 'escar')
       )"
     )
   )
@@ -1673,7 +1672,6 @@ fit <- brm(
 )
 ```
 
-
 ### Model Checks
 
 ```{r}
@@ -1689,12 +1687,12 @@ print(ebfmi_per_chain)
 mcmc_trace(
   as_draws_df(fit), 
   pars = c(
-    # "car",
-    # "sdcar",
-    # "rcar[1]"
-    "sdgp_gplonlat",
-    "lscale_gplonlat",
-    "zgp_gplonlat[1]"
+    "car",
+    "sdcar",
+    "rcar[1]"
+    # "sdgp_gplonlat",
+    # "lscale_gplonlat",
+    # "zgp_gplonlat[1]"
   )
 )
 ```
@@ -1712,12 +1710,12 @@ bayesplot::mcmc_pairs(
     "b_clim",
     "bsp_morel_age_ord",
     "bsp_moschool_level",
-    # "car",
-    # "sdcar",
-    # "rcar[1]"
-    "sdgp_gplonlat",
-    "lscale_gplonlat",
-    "zgp_gplonlat[1]"
+    "car",
+    "sdcar",
+    "rcar[1]"
+    # "sdgp_gplonlat",
+    # "lscale_gplonlat",
+    # "zgp_gplonlat[1]"
   ),
   np = nuts_params(fit),
   np_style = pairs_style_np(
@@ -1737,12 +1735,12 @@ mcmc_parcoord(
     "b_clim",
     "bsp_morel_age_ord",
     "bsp_moschool_level",
-    # "car",
-    # "sdcar",
-    # "rcar[1]"
-    "sdgp_gplonlat",
-    "lscale_gplonlat",
-    "zgp_gplonlat[1]"
+    "car",
+    "sdcar",
+    "rcar[1]"
+    # "sdgp_gplonlat",
+    # "lscale_gplonlat",
+    # "zgp_gplonlat[1]"
   ),
   np = nuts_params(fit),
   np_style = parcoord_style_np(
@@ -1756,9 +1754,9 @@ mcmc_parcoord(
 ```{r}
 plot(
   fit,
-  # variable = "prior_car",
+  variable = "prior_car",
   # variable = "prior_lscale__1_gplonlat",
-  variable = "prior_sdgp",
+  # variable = "prior_sdgp",
   regex = TRUE,
   nvariables = 3
 )
@@ -1767,9 +1765,9 @@ plot(
 ```{r}
 plot(
   fit, 
-  # variable = "^car",
+  variable = "^car",
   # variable = "^lscale",
-  variable = "sdgp_gplonlat",
+  # variable = "sdgp_gplonlat",
   regex = TRUE, 
   nvariables = 3
 )
@@ -2101,8 +2099,8 @@ ggsave(
 df_sp_vars <- (
   as_draws_df(
     fit,
-    # variable = c("car", "sdcar")
-    variable = c("lscale_gplonlat", "sdgp_gplonlat")
+    variable = c("car", "sdcar")
+    # variable = c("lscale_gplonlat", "sdgp_gplonlat")
   )
   %>% select(-c(.chain, .iteration, .draw))
   %>% pivot_longer(

@@ -455,7 +455,7 @@ vacs_zwe <- (
   %>% mutate(
     date = as.Date(as.character(hdate_vf), format = "%Y%m%d"),
     country = "Zimbabwe",
-    rural = if_else(areatype == "Rural", 1, 0),
+    rural = if_else(areatype == 0, 1, 0),
     female = if_else(sex == "2", 1, 0),
     adm1_code = if_else(
       as.integer(prov) == 0,
@@ -687,7 +687,7 @@ vacs_zwe <- (
   %>% select(
     country,
     adm1_code,
-    adm1_name = province,   #district1?
+    adm1_name = province, 
     adm2_code,
     adm2_name,
     cluster = psu,  #GeoCode
@@ -1548,6 +1548,7 @@ vacs_zmb <- (
       10 ~ "Western"
     ),
     adm2_name = NA,
+    adm2_code = as.numeric(paste0(substr(dist, 1, 1), "0", substr(dist, 2, nchar(dist)))), 
     rural = if_else(
       region == 1,
       1,
@@ -1777,7 +1778,7 @@ vacs_zmb <- (
     country,
     adm1_code = prov,
     adm1_name,
-    adm2_code = dist,
+    adm2_code,
     adm2_name,
     cluster = psu,
     date,

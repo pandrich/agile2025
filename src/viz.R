@@ -1109,7 +1109,7 @@ plot_moran_residuals <- function(fit, data, shapes) {
 plot_moran <- function(data, shapes, fit = NULL, outcome_var = NULL, residuals = FALSE) {
   
   if (residuals) {
-    xlab <- "Probability of Violence (residuals)"
+    xlab <- "p(viol, res.)"
     df <- (
       data
       %>% add_residual_draws(fit)
@@ -1120,7 +1120,7 @@ plot_moran <- function(data, shapes, fit = NULL, outcome_var = NULL, residuals =
       )
     )
   } else {
-    xlab <- "Probability of Violence (observed)"
+    xlab <- "p(viol, obs.)"
     df <- (
       data
       %>% group_by(country, adm_name)
@@ -1176,8 +1176,8 @@ plot_moran <- function(data, shapes, fit = NULL, outcome_var = NULL, residuals =
     )
     + coord_cartesian(clip = "off")
     + labs(
-      x = "Probability of Violence (observed)",
-      y = "Spatial Lagged Values"
+      x = xlab,
+      y = "Lagged Values"
     )
   )
   moran_plot

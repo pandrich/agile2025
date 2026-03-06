@@ -92,6 +92,7 @@ df_cc_2014 <- (
     path = file.path(raw_data_dir, "uganda/SAUTI/2014-2015_Data_Sexual_Violence-_Children(1).xlsx"),
     sheet = "Sheet1"
   )
+  %>% rename_with(clean_col_name)
 )
 
 df_cc_2016 <- (
@@ -99,6 +100,7 @@ df_cc_2016 <- (
     path = file.path(raw_data_dir, "uganda/SAUTI/2016 to 2018 Sexual Violence data- children.xlsx"),
     sheet = "Sheet1"
   )
+  %>% rename_with(clean_col_name)
 )
 
 df_cc_2019 <- (
@@ -106,6 +108,7 @@ df_cc_2019 <- (
     path = file.path(raw_data_dir, "uganda/SAUTI/2019 t0 2021 Data sexual Violence- children.xlsx"),
     sheet = "Sheet1"
   )
+  %>% rename_with(clean_col_name)
 )
 
 df_cc_2021 <- (

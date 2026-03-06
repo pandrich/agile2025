@@ -105,15 +105,21 @@ calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
       hist_mean = mean(utci_max, na.rm = TRUE),
-      hist_sd = sd(utci_max, na.rm = TRUE)
+      hist_sd = sd(utci_max, na.rm = TRUE),
+      p85 = quantile(utci_max, 0.85, na.rm = TRUE),
+      p90 = quantile(utci_max, 0.9, na.rm = TRUE),
+      p95 = quantile(utci_max, 0.95, na.rm = TRUE)
     )
     %>% ungroup()
     %>% mutate(
       sd_clim = (utci_max - hist_mean) / hist_sd,
       above_1sd = as.numeric(sd_clim > 1),
+      above_p85 = as.numeric(utci_max > p85),
+      above_p90 = as.numeric(utci_max > p90),
+      above_p95 = as.numeric(utci_max > p95),
       above_32 = as.numeric(utci_max > 32)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% select(-c(hist_mean, hist_sd, sd_clim, p85, p90, p95))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
@@ -171,15 +177,21 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
       hist_mean = mean(temp_2m_max, na.rm = TRUE),
-      hist_sd = sd(temp_2m_max, na.rm = TRUE)
+      hist_sd = sd(temp_2m_max, na.rm = TRUE),
+      p85 = quantile(temp_2m_max, 0.85, na.rm = TRUE),
+      p90 = quantile(temp_2m_max, 0.9, na.rm = TRUE),
+      p95 = quantile(temp_2m_max, 0.95, na.rm = TRUE)
     )
     %>% ungroup()
     %>% mutate(
       sd_clim = (temp_2m_max - hist_mean) / hist_sd,
       above_1sd = as.numeric(sd_clim > 1),
+      above_p85 = as.numeric(temp_2m_max > p85),
+      above_p90 = as.numeric(temp_2m_max > p90),
+      above_p95 = as.numeric(temp_2m_max > p95),
       above_32 = as.numeric(temp_2m_max > 32)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% select(-c(hist_mean, hist_sd, sd_clim, p85, p90, p95))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
@@ -237,15 +249,21 @@ calculate_spei_12m_stats <- function(df_spei, weights = "") {
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
       hist_mean = mean(spei, na.rm = TRUE),
-      hist_sd = sd(spei, na.rm = TRUE)
+      hist_sd = sd(spei, na.rm = TRUE),
+      p05 = quantile(spei, 0.05, na.rm = TRUE),
+      p10 = quantile(spei, 0.1, na.rm = TRUE),
+      p15 = quantile(spei, 0.15, na.rm = TRUE)
     )
     %>% ungroup()
     %>% mutate(
       sd_clim = (spei - hist_mean) / hist_sd,
       below_1sd = as.numeric(sd_clim < -1),
+      below_p05 = as.numeric(spei < p05),
+      below_p10 = as.numeric(spei < p10),
+      below_p15 = as.numeric(spei < p15),
       below_m1 = as.numeric(spei < -1)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim))
+    %>% select(-c(hist_mean, hist_sd, sd_clim, p05, p10, p15))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(

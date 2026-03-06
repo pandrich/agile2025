@@ -1,0 +1,690 @@
+---
+title: "temp Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/temp_2m")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Country Mapping
+country_map <- c(
+  "ZWE" = "Zimbabwe",
+  "ZMB" = "Zambia"
+)
+```
+
+# Functions
+
+```{r}
+build_temp_daily <- function(rast_temp, adm_shapes) {
+  df_temp <- (
+    rast_temp
+    %>% exactextractr::exact_extract(
+      adm_shapes,
+      fun = "weighted_mean",
+      weights = "area",
+      max_cells_in_memory = 176067000,
+      append_cols = c("country", "adm_code", "adm_name")
+    )
+  )
+  colnames(df_temp) <- c("country", "adm_code", "adm_name", as.character(terra::time(rast_temp)))
+  
+  df_temp <- (
+    df_temp
+    %>% pivot_longer(
+      cols = -c("country", "adm_code", "adm_name"),
+      names_to = "date",
+      values_to = "temp_2m_max"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d"),
+      temp_2m_max = temp_2m_max - 273.15
+    )
+  )
+  df_temp
+}
+  
+build_weighted_temp_daily_country <- function(iso3, country_map, rast_temp, rast_pop, adm_pop, adm_shapes) {
+  print(paste0("Starting processing temperature data for: ", iso3))
+  rast_temp_country <- rast_temp %>% terra::crop(terra::vect(adm_shapes %>% st_make_valid() %>% st_union()))
+  dfs_temp_daily <- list()
+  times <- terra::time(rast_temp_country)
+  thresholds <- round(quantile(seq_along(times), probs = c(0, 0.25, 0.5, 0.75, 1)))
+  for (i in seq_along(times)) {
+    if (i %in% thresholds) {
+      thresh_idx <- which(thresholds == i)
+      print(paste0(names(thresh_idx), " complete"))
+    }
+    rast_temp_fine <- terra::resample(rast_temp[[i]], rast_pop)
+    rast_temp_weighted <- rast_temp_fine * rast_pop
+    dfs_temp_daily[[i]] <- (
+      rast_temp_weighted
+      %>% exactextractr::exact_extract(
+        adm_shapes,
+        fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+        max_cells_in_memory = 176067000,
+        append_cols = c("country", "adm_code"),
+        progress = FALSE
+      )
+      %>% merge(
+        adm_pop,
+        by = "adm_code",
+        all.x = TRUE
+      )
+      %>% mutate(
+        date = as.Date(times[i], format = "%Y-%m-%d"),
+        temp_2m_max = (result / pop) - 273.15
+      )
+    )
+  }
+  df_temp <- (
+    bind_rows(dfs_temp_daily)
+    %>% select(-c(pop, result))
+    %>% mutate(
+      country = country_map[[iso3]]
+    )
+    %>% relocate(country)
+  )
+  df_temp %>% write_csv(file.path(proc_data_dir, paste0("temp_2m_max_daily_", iso3, ".csv")))
+  df_temp
+}
+```
+
+# Data Import
+
+## Geographies
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "zwe_admin_boundaries", "zwe_admin2.geojson")
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Zimbabwe",
+    adm_code = as.numeric(gsub("ZW1", "", adm2_pcode))
+  )
+  %>% select(
+    country,
+    adm_name = adm2_name,
+    adm_code
+  )
+  %>% arrange(adm_name)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "zmb_admin_boundaries", "zmb_admin2_em.shp")
+  )
+  %>% rename_with(tolower)
+  %>% mutate(
+    country = "Zambia",
+    adm_code = as.numeric(gsub("ZM1", "", adm2_pcode))
+  )
+  %>% select(
+    country,
+    adm_name = adm2_name,
+    adm_code
+  )
+  %>% arrange(adm_name)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_zwe,
+    sf_zmb
+  )
+)
+```
+
+## Population
+
+### Zimbabwe
+
+```{r}
+rast_pop_zwe <- (
+  terra::rast(  
+    file.path(raw_data_dir, "population", "zwe_pop_2017_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2017_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zwe <- (
+  rast_pop_zwe
+  %>% exactextractr::exact_extract(
+    sf_zwe,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zambia
+
+```{r}
+rast_pop_zmb <- (
+  terra::rast(
+    file.path(raw_data_dir, "population", "zmb_pop_2015_CN_1km_R2025A_UA_v1.tif")
+  )
+  %>% rename(
+    pop = global_pop_2015_CN_1km_R2025A_v1
+  )
+)
+```
+
+```{r}
+adm_pop_zmb <- (
+  rast_pop_zmb
+  %>% exactextractr::exact_extract(
+    sf_zmb,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+## 10-19 Female Population
+
+For each country we consider the population at the year closest to that of the survey.
+
+```{r}
+# Age brackets to consider
+ages <- c(10, 15)
+```
+
+### Zimbabwe
+
+```{r}
+rast_pops <- list()
+for (i in seq_along(ages)) {
+  rast_pops[[i]] <- (
+    terra::rast(
+      file.path(
+        raw_data_dir, 
+        "population", 
+        "disaggregated",
+        "zwe_agesex_structures_2017_CN_1km_R2025A_UA_v1",
+        sprintf("zwe_f_%02d_2017_CN_1km_R2025A_UA_v1.tif", ages[[i]])
+      )
+    )
+    %>% rename(
+      pop = sprintf("global_f_%02d_2017_CN_1km_R2025A_v1", ages[[i]])
+    )
+  )
+}
+
+rast_popf_10_19_zwe <- (
+  sum(terra::rast(rast_pops))
+  %>% rename(
+    pop = sum
+  )
+)
+```
+
+```{r}
+adm_popf_10_19_zwe <- (
+  rast_popf_10_19_zwe
+  %>% exactextractr::exact_extract(
+    sf_zwe,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+### Zambia
+
+```{r}
+rast_pops <- list()
+for (i in seq_along(ages)) {
+  rast_pops[[i]] <- (
+    terra::rast(
+      file.path(
+        raw_data_dir, 
+        "population", 
+        "disaggregated",
+        "zmb_agesex_structures_2015_CN_1km_R2025A_UA_v1",
+        sprintf("zmb_f_%02d_2015_CN_1km_R2025A_UA_v1.tif", ages[[i]])
+      )
+    )
+    %>% rename(
+      pop = sprintf("global_f_%02d_2015_CN_1km_R2025A_v1", ages[[i]])
+    )
+  )
+}
+
+rast_popf_10_19_zmb <- (
+  sum(terra::rast(rast_pops))
+  %>% rename(
+    pop = sum
+  )
+)
+```
+
+```{r}
+adm_popf_10_19_zmb <- (
+  rast_popf_10_19_zmb
+  %>% exactextractr::exact_extract(
+    sf_zmb,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code", "adm_name")
+  )
+  %>% rename(
+    pop = result
+  )
+)
+```
+
+## Temperature
+
+Data from ERA5 received from Neil
+
+```{r}
+rast_temp <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "temp_2m",
+    "era5_t2m_max_2000-2022.nc"
+  )
+)
+```
+
+# Method Outline
+
+```{r}
+# For plotting
+xlims <- c(25.22, 33.1)
+ylims <- c(-22.46, -15.59)
+plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[2] + 0.5)
+```
+
+## Temperature in country
+
+```{r}
+rast_temp_zwe <- rast_temp %>% terra::crop(terra::vect(sf_zwe %>% st_union()))
+rast_times <- terra::time(rast_temp_zwe)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_zwe[[1]],
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_zwe,
+    fill = NA,
+    color = "black",
+    # linewidth = 1.1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + labs(
+    fill = "Temperature"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_grid_zwe.png",
+  width = 5,
+  height = 4
+)
+```
+
+## Downsample one time step
+
+```{r}
+rast_temp_fine_zwe <- terra::resample(rast_temp_zwe[[1]], rast_pop_zwe)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 4
+(
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_fine_zwe %>% terra::crop(plot_extent),
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_zwe,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "temp"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_fine_zwe_zoom.png",
+  width = 5,
+  height = 4
+)
+```
+
+## Population scaled temperature
+
+```{r}
+rast_temp_weighted_zwe <- rast_temp_fine_zwe * rast_pop_zwe
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 4
+
+p1 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_pop_zwe %>% terra::crop(plot_extent),
+    mapping = aes(fill = pop)
+  )
+  + scale_fill_paletteer_c(
+    "scico::devon",
+    na.value = "transparent",
+    direction = -1
+  )
+  + geom_sf(
+    data = sf_zwe,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Population"
+  )
+)
+
+p2 <- (
+  ggplot()
+  + geom_spatraster(
+    data = rast_temp_weighted_zwe %>% terra::crop(plot_extent),
+    mapping = aes(fill = t2m_max_1)
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + geom_sf(
+    data = sf_zwe,
+    fill = NA,
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 18, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 16),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + coord_sf(
+    xlim = xlims,
+    ylim = ylims
+  )
+  + labs(
+    fill = "Temperature * Population"
+  )
+)
+
+p1 + p2
+
+ggsave(
+  path = fig_dir,
+  filename = "temp_pop.png",
+  width = 6.5,
+  height = 4
+)
+```
+
+## Weighted temp
+
+```{r}
+df_temp_daily_zwe <- (
+  rast_temp_weighted_zwe
+  %>% exactextractr::exact_extract(
+    sf_zwe,
+    fun = function(values, coverage_fraction) sum(values * coverage_fraction, na.rm = TRUE),
+    max_cells_in_memory = 176067000,
+    append_cols = c("adm_code"),
+    progress = FALSE
+  )
+  %>% merge(
+    adm_pop_zwe,
+    by = "adm_code",
+    all.x = TRUE
+  )
+  %>% mutate(
+    date = as.Date(rast_times[1], format = "%Y-%m-%d"),
+    temp_2m_max = (result / pop) - 273.15
+  )
+)
+```
+
+```{r}
+sf_temp_daily_zwe <- (
+  sf_zwe
+  %>% merge(
+    df_temp_daily_zwe,
+    by = c("adm_code", "adm_name"),
+    all.x = TRUE
+  )
+)
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 5
+(
+  ggplot()
+  + geom_sf(
+    data = sf_temp_daily_zwe,
+    mapping = aes(fill = temp_2m_max),
+    color = "black",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.background = element_blank(),
+    axis.title = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    plot.title = element_text(size = 16, hjust = 0.5, margin = margin(b = 0)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.key.height = unit(50, "pt"),
+    legend.title = element_text(size = 16, angle = 90, hjust = 0.5),
+    legend.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.title.position = "right",
+  )
+  + scale_fill_paletteer_c(
+    "scico::vik",
+    na.value = "transparent",
+  )
+  + labs(
+    title = "Weighted Temperature",
+    fill = "Max daily temperature"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "temp_weighted_zwe.png",
+  width = 4,
+  height = 5
+)
+```
+
+# Generate datasets
+
+## Raw temperature dataset
+
+```{r}
+df_temp <- build_temp_daily(rast_temp, sf_all)
+```
+
+## All Population Weighted Temperature
+
+### Zimbabwe
+
+```{r}
+df_weighted_temp_zwe <- build_weighted_temp_daily_country("ZWE", country_map, rast_temp, rast_pop_zwe, adm_pop_zwe, sf_zwe)
+```
+
+### Zambia
+
+```{r}
+df_weighted_temp_zmb <- build_weighted_temp_daily_country("ZMB", country_map, rast_temp, rast_pop_zmb, adm_pop_zmb, sf_zmb)
+```
+
+## Girl Population Weighted Temperature
+
+### Zimbabwe
+
+```{r}
+df_girl_weighted_temp_zwe <- build_weighted_temp_daily_country("ZWE", country_map, rast_temp, rast_popf_10_19_zwe, adm_popf_10_19_zwe, sf_zwe)
+```
+
+### Zambia
+
+```{r}
+df_girl_weighted_temp_zmb <- build_weighted_temp_daily_country("ZMB", country_map, rast_temp, rast_popf_10_19_zmb, adm_popf_10_19_zmb, sf_zmb)
+```
+
+# Save
+
+```{r}
+df_temp %>% write_csv(file.path(proc_data_dir, "temp_max_daily_all_countries_admin2.csv"))
+```
+
+```{r}
+df_weighted_temp <- bind_rows(
+  df_weighted_temp_zwe,
+  df_weighted_temp_zmb
+)
+ 
+df_weighted_temp %>% write_csv(file.path(proc_data_dir, "weighted_temp_max_daily_all_countries_admin2.csv"))
+```
+
+```{r}
+df_girl_weighted_temp <- bind_rows(
+  df_girl_weighted_temp_zwe,
+  df_girl_weighted_temp_zmb
+)
+ 
+df_girl_weighted_temp %>% write_csv(file.path(proc_data_dir, "age_weighted_temp_max_daily_all_countries_admin2.csv"))
+```
