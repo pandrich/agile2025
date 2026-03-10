@@ -1,0 +1,1462 @@
+---
+title: "DHS Zambia Data Processing"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(readxl)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Agile 2025 - Analysis of the Uganda call centre data"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/DHS")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
+```
+
+# Parameters
+
+```{r}
+coords <- list(
+  "MOZ" = c(30, 41.2, -26.9, -10.3),
+  "ZWE" = c(25.2, 33.1, -22.5, -15.45),
+  "LSO" = c(26.99, 29.46, -30.68, -28.55),
+  "NAM" = c(11.65, 25.27, -29, -16.9),
+  "ZMB" = c(21.95, 33.8, -18.1, -8.15),
+  "UGA" = c(29.55, 35.05, -1.49, 4.22),
+  "KEN" = c(33.90, 41.92, -4.68, 5.05)
+)
+```
+
+
+# Import Data
+
+## Geometries
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(
+      raw_data_dir,
+      "geographies",
+      "zmb_admin_boundaries",
+      "zmb_admin2.shp"
+    )
+  )
+  %>% select(
+    country = adm0_name,
+    adm1_name,
+    adm2_name
+  )
+)
+```
+
+## Geolocations
+
+```{r}
+sf_dhs_geo_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "DHS", "ZMGE81FL", "ZMGE81FL.shp")
+  )
+  %>% rename_with(str_to_lower)
+  %>% select(
+    cluster = dhsclust
+  )
+)
+```
+
+## Survey Data
+
+```{r}
+wealth_map <- c(
+  "poorest" = 1,
+  "poorer" = 2,
+  "middle" = 3,
+  "richer" = 4,
+  "richest" = 5
+)
+
+df_dhs_surv_zmb <- (
+  read_csv(
+    file.path(
+      raw_data_dir,
+      "DHS",
+      "data_from_Diana_2.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% mutate(
+    date = as.Date(
+      paste0(
+        year_of_interview,
+        sprintf("%02d", month_of_interview),
+        sprintf("%02d", day_of_interview)
+      ),
+      format = "%Y%m%d"
+    ),
+    date = lubridate::ceiling_date(date, unit = "month") - days(1),
+    female = if_else(
+      sex == "female",
+      1,
+      0
+    ),
+    rural = if_else(
+      residence_type == "rural",
+      1,
+      0
+    ),
+    wealth_quintile = wealth_map[wealth_quintile],
+    num_of_residence_years = as.numeric(case_when(
+      num_of_residence_years == "Always" ~ "100",
+      num_of_residence_years == "Visitor" ~ "0",
+      .default = num_of_residence_years
+    )),
+    years_since_sexual_debut = age_respondent - age_sexual_debut,
+    year_of_sexual_debut = year(date %m-% years(years_since_sexual_debut))
+  )
+  %>% select(
+    cluster = clustre_num,
+    date,
+    household = household_num,
+    weight = weight_household,
+    rural,
+    female,
+    age = age_respondent,
+    education,
+    marital_status,
+    wealth_quintile,
+    num_of_residence_years,
+    age_sexual_debut,
+    years_since_sexual_debut,
+    year_of_sexual_debut,
+    num_sex_partners,
+    condom_last_sex,
+    ever_hiv_tested
+  )
+)
+```
+
+```{r}
+(
+  ggplot(data =   df_dhs_surv_zmb)
+  + geom_histogram(
+    mapping = aes(
+      x = years_since_sexual_debut
+    )
+  )
+)
+```
+
+## SPEI
+
+Data obtained using the Climate Data Store API
+
+```{r}
+rast_spei <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "SPEI",
+    "spei01.nc"
+  )
+)
+```
+
+## UTCI
+
+```{r}
+
+```
+
+
+# Process Data
+
+## Zambia
+
+### Assign admin area to respondents
+
+```{r}
+df_dhs_adm_zmb <- (
+  sf_zmb
+  %>% st_join(
+    sf_dhs_geo_zmb,
+    join = st_contains,
+    left = TRUE
+  )
+  %>% as.data.frame()
+  %>% select(
+    cluster,
+    adm1_name,
+    adm2_name
+  )
+)
+```
+
+### SPEI
+
+#### Create dataset
+
+```{r}
+start_date <- "1960-01-01"
+rast_spei_times <- terra::time(rast_spei)
+ids <- which(rast_spei_times >= start_date)
+```
+
+
+```{r}
+thresholds <- round(quantile(seq_along(ids), probs = c(0, 0.25, 0.5, 0.75, 1)))
+sfs_spei <- list()
+for (i in seq_along(ids)) {
+  if (i %in% thresholds) {
+    thresh_idx <- which(thresholds == i)
+    print(paste0(names(thresh_idx), " complete"))
+  }
+  sfs_spei[[i]] <- (
+    rast_spei
+    %>% terra::subset(ids[[i]])
+    %>% terra::crop(terra::ext(coords[["ZMB"]]))
+    %>% terra::as.polygons(aggregate = FALSE)
+    %>% st_as_sf()
+    %>% mutate(
+      spei_tile_code = row_number(),
+      date = as.Date(rast_spei_times[[ids[[i]]]])
+    )
+    %>% rename(
+      spei = 1
+    )
+    %>% select(
+      spei_tile_code,
+      date,
+      spei
+    )
+  )
+}
+spei_grid_map_zmb <- sfs_spei[[i]] %>% select(spei_tile_code)
+df_spei_grid_zmb <- (
+  bind_rows(sfs_spei)
+  %>% as_tibble()
+  %>% select(-geometry)
+)
+```
+
+#### Assign tile to clusters
+
+```{r}
+df_dhs_spei_grid_zmb <- (
+  sf_dhs_geo_zmb
+  %>% st_join(
+    spei_grid_map_zmb,
+    join = st_intersects,
+    left = TRUE
+  )
+  %>% as_tibble()
+  %>% select(
+    cluster,
+    spei_tile_code
+  )
+)
+```
+
+#### Calculate rolling stats
+
+```{r}
+df_spei_cum_zmb <- (
+  df_spei_grid_zmb
+  %>% filter(
+    spei_tile_code %in% unique(df_dhs_spei_grid_zmb$spei_tile_code)
+  )
+  %>% mutate(
+    date = lubridate::ceiling_date(date, unit = "month") - days(1),
+    decade = round(year(date), digits = -1)
+  )
+  %>% group_by(spei_tile_code, decade)
+  %>% mutate(
+    hist_mean = mean(spei, na.rm = TRUE),
+    hist_sd = sd(spei, na.rm = TRUE),
+    p05 = quantile(spei, 0.05, na.rm = TRUE),
+    p10 = quantile(spei, 0.1, na.rm = TRUE),
+    p15 = quantile(spei, 0.15, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (spei - hist_mean) / hist_sd,
+    below_1sd = as.numeric(sd_clim < -1),
+    below_p05 = as.numeric(spei < p05),
+    below_p10 = as.numeric(spei < p10),
+    below_p15 = as.numeric(spei < p15),
+    below_m1 = as.numeric(spei < -1)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim, p05, p10, p15))
+  %>% arrange(spei_tile_code, date)
+  %>% group_by(spei_tile_code)
+  %>% mutate(
+    across(
+      -c(date, spei),
+      ~ (
+        slider::slide_index_dbl(
+          .x = (.),
+          .i = date,
+          .f = ~ sum(.x, na.rm = TRUE),
+          .before = ~ .x %m-% months(12),
+          .complete = TRUE
+        )
+      ),
+      .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, spei),
+      ~ (
+        slider::slide_index_dbl(
+          .x = (.),
+          .i = date,
+          .f = ~ sum(.x, na.rm = TRUE),
+          .before = ~ .x %m-% months(24),
+          .complete = TRUE
+        )
+      ),
+      .names = "{.col}_24m"
+    )
+  )
+  %>% ungroup()
+  %>% select(spei_tile_code, date, contains("12m"),contains("24m"))
+  %>% filter(!is.na(below_m1_12m))
+  %>% pivot_longer(
+    cols = -c(spei_tile_code, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(spei_tile_code, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = value - mean_value,
+    # dev_value = if_else(
+    #   sd_value == 0,
+    #   0,
+    #   (value - mean_value) / sd_value
+    # ),
+    variable = paste0("spei_", variable)
+  )
+  %>% filter(!is.na(value))
+  %>% pivot_wider(
+    id_cols = c(spei_tile_code, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+#### Calculate yearly stats
+
+```{r}
+df_spei_yearly_zmb <- (
+  df_spei_grid_zmb
+  %>% filter(
+    spei_tile_code %in% unique(df_dhs_spei_grid_zmb$spei_tile_code)
+  )
+  %>% mutate(
+    year = year(date),
+    decade = round(year, digits = -1)
+  )
+  %>% group_by(spei_tile_code, decade)
+  %>% mutate(
+    hist_mean = mean(spei, na.rm = TRUE),
+    hist_sd = sd(spei, na.rm = TRUE),
+    p05 = quantile(spei, 0.05, na.rm = TRUE),
+    p10 = quantile(spei, 0.1, na.rm = TRUE),
+    p15 = quantile(spei, 0.15, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (spei - hist_mean) / hist_sd,
+    below_1sd = as.numeric(sd_clim < -1),
+    below_p05 = as.numeric(spei < p05),
+    below_p10 = as.numeric(spei < p10),
+    below_p15 = as.numeric(spei < p15),
+    below_m1 = as.numeric(spei < -1)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim, p05, p10, p15))
+  %>% group_by(spei_tile_code, year)
+  %>% summarise(
+    mean_spei_year = mean(spei, na.rm = TRUE),
+    median_spei_year = median(spei, na.rm = TRUE),
+    spei_below_1sd_year = sum(below_1sd, na.rm = TRUE),
+    spei_below_m1_year = sum(below_m1, na.rm = TRUE),
+    spei_below_p05_year = sum(below_p05, na.rm = TRUE),
+    spei_below_p10_year = sum(below_p10, na.rm = TRUE),
+    spei_below_p15_year = sum(below_p15, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+  %>% select(spei_tile_code, year, contains("year"))
+  %>% filter(!is.na(spei_below_1sd_year))
+  %>% pivot_longer(
+    cols = -c(spei_tile_code, year),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(spei_tile_code, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = value - mean_value,
+  )
+  %>% filter(!is.na(value))
+  %>% pivot_wider(
+    id_cols = c(spei_tile_code, year),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+### UTCI
+
+#### Create dataset
+
+```{r}
+rast_files <- list.files(file.path(raw_data_dir, "climate/utci/daily/ZMB"), pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
+thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
+sfs_utci <- list()
+for (i in seq_along(rast_files)) {
+  if (i %in% thresholds) {
+    thresh_idx <- which(thresholds == i)
+    print(paste0(names(thresh_idx), " complete"))
+  }
+  rast_utci <- terra::rast(rast_files[[i]])["utci_daily_max"]
+  date <- terra::time(rast_utci)[[1]]
+  sfs_utci[[i]] <- (
+    rast_utci
+    %>% terra::as.polygons(aggregate = FALSE)
+    %>% st_as_sf()
+    %>% mutate(
+      utci_tile_code = row_number(),
+      date = as.Date(date, format = "%Y-%m-%d"),
+      utci_daily_max = utci_daily_max - 273.15
+    )
+    %>% select(
+      utci_tile_code,
+      date,
+      utci_daily_max
+    )
+  )
+}
+utci_grid_map_zmb <- sfs_utci[[i]] %>% select(utci_tile_code)
+df_utci_grid_zmb <- (
+  bind_rows(sfs_utci)
+  %>% as_tibble()
+  %>% select(-geometry)
+)
+```
+
+#### Assign tile to clusters
+
+```{r}
+df_dhs_utci_grid_zmb <- (
+  sf_dhs_geo_zmb
+  %>% st_join(
+    utci_grid_map_zmb,
+    join = st_intersects,
+    left = TRUE
+  )
+  %>% as_tibble()
+  %>% select(
+    cluster,
+    utci_tile_code
+  )
+)
+```
+
+#### Calculate rolling stats
+
+```{r}
+df_utci_cum_zmb <- (
+  df_utci_grid_zmb
+  %>% filter(
+    utci_tile_code %in% unique(df_dhs_utci_grid_zmb$utci_tile_code)
+  )
+  %>% mutate(
+    decade = round(year(date), digits = -1)
+  )
+  %>% group_by(utci_tile_code, decade)
+  %>% mutate(
+    hist_mean = mean(utci_daily_max, na.rm = TRUE),
+    hist_sd = sd(utci_daily_max, na.rm = TRUE),
+    p85 = quantile(utci_daily_max, 0.85, na.rm = TRUE),
+    p90 = quantile(utci_daily_max, 0.9, na.rm = TRUE),
+    p95 = quantile(utci_daily_max, 0.95, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (utci_daily_max - hist_mean) / hist_sd,
+    above_1sd = as.numeric(sd_clim > 1),
+    above_p85 = as.numeric(utci_daily_max > p85),
+    above_p90 = as.numeric(utci_daily_max > p90),
+    above_p95 = as.numeric(utci_daily_max > p95),
+    above_32 = as.numeric(utci_daily_max > 32)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim, p85, p90, p95))
+  %>% arrange(utci_tile_code, date)
+  %>% group_by(utci_tile_code)
+  %>% mutate(
+    across(
+      -c(date, utci_daily_max),
+      ~ (
+        slider::slide_index_dbl(
+          .x = (.),
+          .i = date,
+          .f = ~ sum(.x, na.rm = TRUE),
+          .before = ~ .x %m-% months(12),
+          .complete = TRUE
+        )
+      ),
+      .names = "{.col}_12m"
+    ),
+    across(
+      -c(date, utci_daily_max),
+      ~ (
+        slider::slide_index_dbl(
+          .x = (.),
+          .i = date,
+          .f = ~ sum(.x, na.rm = TRUE),
+          .before = ~ .x %m-% months(24),
+          .complete = TRUE
+        )
+      ),
+      .names = "{.col}_24m"
+    )
+  )
+  %>% ungroup()
+  %>% select(utci_tile_code, date, contains("12m"), contains("24m"))
+  %>% filter(!is.na(above_1sd_12m))
+  %>% pivot_longer(
+    cols = -c(utci_tile_code, date),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(utci_tile_code, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = value - mean_value,
+    # dev_value = if_else(
+    #   sd_value == 0,
+    #   0,
+    #   (value - mean_value) / sd_value
+    # ),
+    variable = paste0("utci_", variable)
+  )
+  %>% filter(!is.na(value))
+  %>% pivot_wider(
+    id_cols = c(utci_tile_code, date),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+#### Calculate yearly stats
+
+```{r}
+df_utci_yearly_zmb <- (
+  df_utci_grid_zmb
+  %>% filter(
+    utci_tile_code %in% unique(df_dhs_utci_grid_zmb$utci_tile_code)
+  )
+  %>% mutate(
+    year = year(date),
+    decade = round(year, digits = -1)
+  )
+  %>% group_by(utci_tile_code, decade)
+  %>% mutate(
+    hist_mean = mean(utci_daily_max, na.rm = TRUE),
+    hist_sd = sd(utci_daily_max, na.rm = TRUE),
+    p85 = quantile(utci_daily_max, 0.85, na.rm = TRUE),
+    p90 = quantile(utci_daily_max, 0.9, na.rm = TRUE),
+    p95 = quantile(utci_daily_max, 0.95, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sd_clim = (utci_daily_max - hist_mean) / hist_sd,
+    above_1sd = as.numeric(sd_clim > 1),
+    above_p85 = as.numeric(utci_daily_max > p85),
+    above_p90 = as.numeric(utci_daily_max > p90),
+    above_p95 = as.numeric(utci_daily_max > p95),
+    above_32 = as.numeric(utci_daily_max > 32)
+  )
+  %>% select(-c(decade, hist_mean, hist_sd, sd_clim, p85, p90, p95))
+  %>% group_by(utci_tile_code, year)
+  %>% summarise(
+    mean_utci_year = mean(utci_daily_max, na.rm = TRUE),
+    median_utci_year = median(utci_daily_max, na.rm = TRUE),
+    utci_above_1sd_year = sum(above_1sd, na.rm = TRUE),
+    utci_above_32_year = sum(above_32, na.rm = TRUE),
+    utci_above_p85_year = sum(above_p85, na.rm = TRUE),
+    utci_above_p90_year = sum(above_p90, na.rm = TRUE),
+    utci_above_p95_year = sum(above_p95, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+  %>% select(utci_tile_code, year, contains("year"))
+  %>% filter(!is.na(utci_above_1sd_year))
+  %>% pivot_longer(
+    cols = -c(utci_tile_code, year),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(utci_tile_code, variable)
+  %>% mutate(
+    mean_value = mean(value, na.rm = TRUE),
+    sd_value = sd(value, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    dev_value = value - mean_value,
+  )
+  %>% filter(!is.na(value))
+  %>% pivot_wider(
+    id_cols = c(utci_tile_code, year),
+    names_from = "variable",
+    values_from = c(value, dev_value)
+  )
+)
+```
+
+### Assign tiles to respondents
+
+```{r}
+df_dhs_surv_tile_zmb <- (
+  df_dhs_surv_zmb
+  %>% merge(
+    df_dhs_spei_grid_zmb,
+    by = "cluster",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_dhs_utci_grid_zmb,
+    by = "cluster",
+    all.x = TRUE
+  )
+)
+```
+
+### Assign climate and admin to respondent - Single time
+
+```{r}
+df_dhs_surv_adm_clim_zmb <- (
+  df_dhs_surv_tile_zmb
+  %>% merge(
+    df_dhs_adm_zmb,
+    by = "cluster",
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_cum_zmb,
+    by = c("spei_tile_code", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_utci_cum_zmb,
+    by = c("utci_tile_code", "date"),
+    all.x = TRUE
+  )
+  %>% select(-c(spei_tile_code, utci_tile_code, years_since_sexual_debut, year_of_sexual_debut))
+)
+```
+
+```{r}
+hist(df_dhs_surv_adm_clim_zmb$value_utci_above_p95_12m)
+```
+
+```{r}
+colMeans(is.na(df_dhs_surv_adm_clim_zmb))
+```
+
+### Save
+
+```{r}
+write_csv(df_dhs_surv_adm_clim_zmb %>% select(-contains("utci")), file = file.path(proc_data_dir, "dhs_climate_zmb_by_tile.csv"))
+```
+
+```{r}
+# df_dhs_surv_adm_clim_zmb_old <- (
+#   read_csv(
+#     file.path(proc_data_dir, "dhs_climate_zmb.csv"),
+#     show_col_types = FALSE
+#   )
+#   %>% select(
+#     adm1_name,
+#     adm2_name,
+#     date,
+#     cluster,
+#     household,
+#     contains("12m"),
+#     contains("24m")
+#   )
+# )
+```
+
+```{r}
+# df_dhs_surv_adm_clim_zmb_new <- (
+#   df_dhs_surv_adm_clim_zmb
+#   %>% select(
+#     colnames(df_dhs_surv_adm_clim_zmb_old)
+#   )
+# )
+```
+
+```{r}
+# df_comp <- (
+#   df_dhs_surv_adm_clim_zmb_new
+#   %>% pivot_longer(
+#     cols = -c("adm1_name", "adm2_name", "date", "cluster", "household"),
+#     names_to = "variable",
+#     values_to = "value_new"
+#   )
+#   %>% bind_cols(
+#     df_dhs_surv_adm_clim_zmb_old
+#     %>% select(contains("12m") | contains("24m"))
+#     %>% pivot_longer(
+#       cols = everything(),
+#       names_to = "variable_old",
+#       values_to = "value_old"
+#     )
+#   )
+#   %>% mutate(
+#     diff_value = value_new - value_old
+#   )
+  # %>% select(-c(value_new, value_old, variable_old))
+  # %>% pivot_wider(
+  #   id_cols = c(adm1_name, adm2_name, date, cluster, household),
+  #   names_from = variable,
+  #   values_from = diff_value
+  # )
+)
+```
+
+
+### Assign climate to respondent - Sexual Debut
+
+```{r}
+df_sex_debut_adm_zmb <- (
+  df_dhs_surv_tile_zmb
+  %>% merge(
+    df_dhs_adm_zmb,
+    by = "cluster",
+    all.x = TRUE
+  )
+  %>% filter(
+    num_of_residence_years > years_since_sexual_debut + 1
+  )
+  %>% select(
+    spei_tile_code,
+    utci_tile_code,
+    adm1_name,
+    adm2_name,
+    weight,
+    rural,
+    female,
+    wealth_quintile,
+    year = year_of_sexual_debut,
+    age_sexual_debut
+  )
+  %>% mutate(
+    weight = weight / sum(weight, na.rm = TRUE),
+    early_sexual_debut = age_sexual_debut < 15
+  )
+  %>% merge(
+    df_spei_yearly_zmb,
+    by = c("spei_tile_code", "year"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_utci_yearly_zmb,
+    by = c("utci_tile_code", "year"),
+    all.x = TRUE
+  )
+)
+```
+
+# Viz
+
+```{r}
+df_sex_debut_viz <- (
+  df_sex_debut_adm_zmb
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    perc_early_sex_debut = sum(early_sexual_debut * weight, na.rm = TRUE) / sum(weight, na.rm = TRUE),
+    mean_spei = mean(value_mean_spei_year, na.rm = TRUE),
+    spei_below_p10 = mean(value_spei_below_p10_year, na.rm = TRUE),
+    dev_spei_below_p10 = mean(dev_value_spei_below_p10_year, na.rm = TRUE),
+    dev_mean_utci = mean(dev_value_mean_spei_year, na.rm = TRUE),
+    utci_above_p90 = mean(value_utci_above_p90_year, na.rm = TRUE),
+    dev_utci_above_p90 = mean(dev_value_utci_above_p90_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% pivot_longer(
+    cols = -c(adm1_name, year),
+    names_to = "variable",
+    values_to = "value"
+  )
+)
+```
+
+## Sexual Debut
+
+### Counts of Sexual Debuts by year
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+(
+  df_sex_debut_adm_zmb
+  %>% ggplot()
+  + geom_histogram(
+    mapping = aes(
+      x = year,
+      fill = early_sexual_debut
+    ),
+    position = "stack",
+    binwidth = 1
+  )
+  + scale_fill_manual(
+    values = c(`FALSE` = "#088BBEFF", `TRUE` = "#EF7C12FF")
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    legend.position = "inside",
+    legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "# Sexual Debuts",
+    fill = "Early Sexual Debut"
+  )
+)
+
+# ggsave(
+#   path = fig_dir,
+#   filename = "sexual_debut_by_year_zmb.png"
+# )
+```
+
+### Rate of early sexual debuts by year
+
+```{r}
+#| fig-width: 5.075
+#| fig-height: 2.5
+(
+  df_sex_debut_viz
+  # %>% filter(year > 1970)
+  %>% group_by(year, variable)
+  %>% summarise(
+    mean_value = mean(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% filter(
+    variable == "perc_early_sex_debut"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = mean_value)
+  )
+  + scale_y_continuous(
+    labels = scales::percent
+  )
+  + geom_line(color = "#1BB6AFFF", linewidth = 1.2)
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    legend.position = "inside",
+    legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "Early Sexual Debuts"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = "rate_of_early_sexual_debut_by_year_zmb.png"
+)
+```
+
+## By admin 2
+
+### Rate of sexual debut by year
+
+```{r}
+p1 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    perc_early_sex_debut = mean(early_sexual_debut, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = perc_early_sex_debut, color = adm1_name)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_y_continuous(
+    labels = scales::percent
+  )
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "Early Sexual Debuts",
+    color = "District"
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "rate_of_early_sexual_debut_by_year_by_admin1_zmb.png"
+# )
+```
+
+### SPEI
+
+#### Mean
+
+```{r}
+p2 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    mean_spei = mean(value_mean_spei_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = mean_spei, color = adm1_name)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "Mean SPEI",
+    color = "District"
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "mean_spei_by_year_by_admin1_zmb.png"
+# )
+```
+
+#### Months of drought-like conditions
+
+```{r}
+p3 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    months_low_spei = mean(value_spei_below_p10_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = months_low_spei, color = adm1_name)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "# Drought Months",
+    color = "District"
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "num_spei_below_p10_by_year_by_admin1_zmb.png"
+# )
+```
+
+### UTCI
+
+#### Deviation from Mean
+
+```{r}
+p4 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    dev_mean_utci = mean(dev_value_mean_utci_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = dev_mean_utci, color = adm1_name)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "Dev. Mean UTCI",
+    color = "District"
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "mean_utci_by_year_by_admin1_zmb.png"
+# )
+```
+
+#### Dev. Days of high-heat conditions
+
+```{r}
+p5 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(adm1_name, year)
+  %>% summarise(
+    dev_days_high_utci = mean(dev_value_utci_above_p90_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = dev_days_high_utci, color = adm1_name)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+    # legend.position = "inside",
+    # legend.position.inside = c(0.25, 0.78)
+  )
+  + labs(
+    x = "Year",
+    y = "Dev. # Hot Days",
+    color = "District"
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "num_utci_above_32_by_year_by_admin1_zmb.png"
+# )
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 10
+(
+  p1 / p2 / p3 / p4 / p5
+  + plot_layout(
+    guides = "collect",
+    axes = "collect"
+  )
+  & theme(
+    plot.margin = margin(b = 0, t = 10, l = 10, r = 10)
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "early_sex_debut_spei_by_year_by_admin1_zmb.png"
+# )
+#   
+```
+
+## Whole country
+
+### Rate of sexual debut by year
+
+```{r}
+p1 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(year)
+  %>% summarise(
+    perc_early_sex_debut = mean(early_sexual_debut, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = perc_early_sex_debut)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_y_continuous(
+    labels = scales::percent
+  )
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Year",
+    y = "Early Sexual Debuts",
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "rate_of_early_sexual_debut_by_year_zmb.png"
+# )
+```
+
+### SPEI
+
+#### Mean
+
+```{r}
+p2 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(year)
+  %>% summarise(
+    mean_spei = mean(value_mean_spei_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = mean_spei)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Year",
+    y = "Mean SPEI",
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "mean_spei_by_year_zmb.png"
+# )
+```
+
+#### Months of drought-like conditions
+
+```{r}
+p3 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(year)
+  %>% summarise(
+    months_low_spei = mean(value_spei_below_p10_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = months_low_spei)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Year",
+    y = "# Drought Months",
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "num_spei_below_p10_by_year_zmb.png"
+# )
+```
+
+### UTCI
+
+#### Deviation from Mean
+
+```{r}
+p4 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(year)
+  %>% summarise(
+    dev_mean_utci = mean(dev_value_mean_utci_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = dev_mean_utci)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Year",
+    y = "Dev. Mean UTCI",
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "mean_utci_by_year_zmb.png"
+# )
+```
+
+#### Dev. Days of high-heat conditions
+
+```{r}
+p5 <- (
+  df_sex_debut_adm_zmb
+  %>% filter(
+    year > 1990,
+    year < 2024
+  )
+  %>% group_by(year)
+  %>% summarise(
+    dev_days_high_utci = mean(dev_value_utci_above_p90_year, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ggplot(
+    mapping = aes(x = year, y = dev_days_high_utci)
+  )
+  + geom_line(linewidth = 1.2)
+  + scale_color_paletteer_d(
+    palette = "RColorBrewer::RdYlBu"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 17),
+    plot.margin = margin(l = 10, r = 10, b = 10, t = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 14),
+    legend.background = element_blank(),
+    legend.frame = element_blank(),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    x = "Year",
+    y = "Dev. # Hot Days",
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "num_utci_above_32_by_year_zmb.png"
+# )
+```
+
+
+```{r}
+#| fig-width: 8
+#| fig-height: 10
+(
+  p1 / p2 / p3 / p4 / p5
+  + plot_layout(
+    guides = "collect",
+    axes = "collect"
+  )
+  & theme(
+    plot.margin = margin(b = 0, t = 10, l = 10, r = 10)
+  )
+)
+# ggsave(
+#   path = fig_dir,
+#   filename = "early_sex_debut_spei_by_year_zmb.png"
+# )
+#   
+```

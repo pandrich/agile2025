@@ -165,6 +165,77 @@ calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
   df_utci_12m
 }
 
+calculate_utci_12m_stats_monthly_ave <- function(df_utci_daily, weights = "") {
+  if (weights != "") {
+    variable_name = paste0(weights, "_", "utci_max")
+  } else {
+    variable_name = "utci_max"
+  }
+  df_utci_12m <- (
+    df_utci_daily
+    %>% group_by(country, adm_code, adm_name, month(date))
+    %>% mutate(
+      hist_mean = mean(utci_max, na.rm = TRUE),
+      hist_sd = sd(utci_max, na.rm = TRUE),
+      p85 = quantile(utci_max, 0.85, na.rm = TRUE),
+      p90 = quantile(utci_max, 0.9, na.rm = TRUE),
+      p95 = quantile(utci_max, 0.95, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (utci_max - hist_mean) / hist_sd,
+      above_1sd = as.numeric(sd_clim > 1),
+      above_p85 = as.numeric(utci_max > p85),
+      above_p90 = as.numeric(utci_max > p90),
+      above_p95 = as.numeric(utci_max > p95),
+      above_32 = as.numeric(utci_max > 32)
+    )
+    %>% select(-c(`month(date)`, hist_mean, hist_sd, sd_clim, p85, p90, p95))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, utci_max),
+        ~ (
+          slider::slide_index_dbl(
+            .x = (.),
+            .i = date,
+            .f = ~ sum(.x, na.rm = TRUE),
+            .before = ~ .x %m-% months(12),
+            .complete = TRUE
+          )
+        ),
+        .names = "{.col}_12m"
+      ),
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(above_1sd_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = (value - mean_value),
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_utci_12m
+}
+
 
 calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
   if (weights != "") {
@@ -237,6 +308,77 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
   df_temp_12m
 }
 
+calculate_temp_12m_stats_monthly_ave <- function(df_temp_daily, weights = "") {
+  if (weights != "") {
+    variable_name = paste0(weights, "_", "temp_2m_max")
+  } else {
+    variable_name = "temp_2m_max"
+  }
+  df_temp_12m <- (
+    df_temp_daily
+    %>% group_by(country, adm_code, adm_name, month(date))
+    %>% mutate(
+      hist_mean = mean(temp_2m_max, na.rm = TRUE),
+      hist_sd = sd(temp_2m_max, na.rm = TRUE),
+      p85 = quantile(temp_2m_max, 0.85, na.rm = TRUE),
+      p90 = quantile(temp_2m_max, 0.9, na.rm = TRUE),
+      p95 = quantile(temp_2m_max, 0.95, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (temp_2m_max - hist_mean) / hist_sd,
+      above_1sd = as.numeric(sd_clim > 1),
+      above_p85 = as.numeric(temp_2m_max > p85),
+      above_p90 = as.numeric(temp_2m_max > p90),
+      above_p95 = as.numeric(temp_2m_max > p95),
+      above_32 = as.numeric(temp_2m_max > 32)
+    )
+    %>% select(-c(`month(date)`, hist_mean, hist_sd, sd_clim, p85, p90, p95))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, temp_2m_max),
+        ~ (
+          slider::slide_index_dbl(
+            .x = (.),
+            .i = date,
+            .f = ~ sum(.x, na.rm = TRUE),
+            .before = ~ .x %m-% months(12),
+            .complete = TRUE
+          )
+        ),
+        .names = "{.col}_12m"
+      )
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(above_1sd_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = value - mean_value,
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_temp_12m
+}
+
 
 calculate_spei_12m_stats <- function(df_spei, weights = "") {
   if (weights != "") {
@@ -264,6 +406,82 @@ calculate_spei_12m_stats <- function(df_spei, weights = "") {
       below_m1 = as.numeric(spei < -1)
     )
     %>% select(-c(hist_mean, hist_sd, sd_clim, p05, p10, p15))
+    %>% arrange(country, adm_code, adm_name, date)
+    %>% group_by(country, adm_code, adm_name)
+    %>% mutate(
+      across(
+        -c(date, spei),
+        ~ (
+          slider::slide_index_dbl(
+            .x = (.),
+            .i = date,
+            .f = ~ sum(.x, na.rm = TRUE),
+            .before = ~ .x %m-% months(12),
+            .complete = TRUE
+          )
+        ),
+        .names = "{.col}_12m"
+      ),
+    )
+    %>% ungroup()
+    %>% select(country, adm_code, adm_name, date, contains("12m"))
+    %>% filter(!is.na(below_m1_12m))
+    %>% pivot_longer(
+      cols = -c(country, adm_code, adm_name, date),
+      names_to = "variable",
+      values_to = "value"
+    ) 
+    %>% group_by(country, adm_code, adm_name, variable)
+    %>% mutate(
+      mean_value = mean(value, na.rm = TRUE),
+      sd_value = sd(value, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      dev_value = value - mean_value,
+      # dev_value = if_else(
+      #   sd_value == 0,
+      #   0,
+      #   (value - mean_value) / sd_value
+      # ),
+      variable = paste0(variable_name, "_", variable)
+    )
+    %>% filter(!is.na(value))
+    %>% pivot_wider(
+      id_cols = c(country, adm_code, adm_name, date),
+      names_from = "variable",
+      values_from = c(value, dev_value)
+    )
+  )
+  df_spei_12m
+}
+
+calculate_spei_12m_stats_monthly_ave <- function(df_spei, weights = "") {
+  if (weights != "") {
+    variable_name = paste0(weights, "_", "spei")
+  } else {
+    variable_name = "spei"
+  }
+  df_spei_12m <- (
+    df_spei
+    %>% group_by(country, adm_code, adm_name, month(date))
+    %>% mutate(
+      hist_mean = mean(spei, na.rm = TRUE),
+      hist_sd = sd(spei, na.rm = TRUE),
+      p05 = quantile(spei, 0.05, na.rm = TRUE),
+      p10 = quantile(spei, 0.1, na.rm = TRUE),
+      p15 = quantile(spei, 0.15, na.rm = TRUE)
+    )
+    %>% ungroup()
+    %>% mutate(
+      sd_clim = (spei - hist_mean) / hist_sd,
+      below_1sd = as.numeric(sd_clim < -1),
+      below_p05 = as.numeric(spei < p05),
+      below_p10 = as.numeric(spei < p10),
+      below_p15 = as.numeric(spei < p15),
+      below_m1 = as.numeric(spei < -1)
+    )
+    %>% select(-c(`month(date)`, hist_mean, hist_sd, sd_clim, p05, p10, p15))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(

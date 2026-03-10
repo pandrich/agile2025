@@ -1,5 +1,5 @@
 ---
-title: "Preprocess Climate Data"
+title: "Preprocess Climate Data with Monthly Averages"
 format: html
 editor: visual
 ---
@@ -23,7 +23,7 @@ mod_dir <- root("models")
 src_dir <- root("src")
 
 # Settings
-nb_name <-  "Process daily climate data"
+nb_name <-  "Process daily climate data, monthly averages"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 set.seed(seed)
 ```
@@ -176,19 +176,35 @@ df_spei_girl_weighted <- (
 ### Raw UTCI
 
 ```{r}
-df_utci_12m <- calculate_utci_12m_stats(df_utci)
+df_utci_12m <- calculate_utci_12m_stats_monthly_ave(df_utci)
 ```
+
+```{r}
+(
+  df_spei
+  %>% group_by(country, adm_code, adm_name, month(date))
+  %>% mutate(
+    hist_mean = mean(spei, na.rm = TRUE),
+    hist_sd = sd(spei, na.rm = TRUE),
+    p05 = quantile(spei, 0.05, na.rm = TRUE),
+    p10 = quantile(spei, 0.1, na.rm = TRUE),
+    p15 = quantile(spei, 0.15, na.rm = TRUE)
+  )
+  %>% ungroup()
+)
+```
+
 
 ### Population Weighted UTCI
 
 ```{r}
-df_utci_pop_weighted_12m <- calculate_utci_12m_stats(df_utci_pop_weighted, weights = "pop_weighted")
+df_utci_pop_weighted_12m <- calculate_utci_12m_stats_monthly_ave(df_utci_pop_weighted, weights = "pop_weighted")
 ```
 
 ### Girl Population Weighted UTCI
 
 ```{r}
-df_utci_girl_weighted_12m <- calculate_utci_12m_stats(df_utci_girl_weighted, weights = "girl_weighted")
+df_utci_girl_weighted_12m <- calculate_utci_12m_stats_monthly_ave(df_utci_girl_weighted, weights = "girl_weighted")
 ```
 
 ## Temperature
@@ -196,7 +212,7 @@ df_utci_girl_weighted_12m <- calculate_utci_12m_stats(df_utci_girl_weighted, wei
 ### Raw Temperature
 
 ```{r}
-df_temp_12m <- calculate_temp_12m_stats(df_temp)
+df_temp_12m <- calculate_temp_12m_stats_monthly_ave(df_temp)
 ```
 
 ```{r}
@@ -206,7 +222,7 @@ colSums(is.na(df_temp_12m))
 ### Population Weighted Temperature
 
 ```{r}
-df_temp_pop_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weights = "pop_weighted")
+df_temp_pop_weighted_12m <- calculate_temp_12m_stats_monthly_ave(df_temp_pop_weighted, weights = "pop_weighted")
 ```
 
 ```{r}
@@ -216,7 +232,7 @@ colSums(is.na(df_temp_pop_weighted_12m))
 ### Girl Population Weighted Temperature
 
 ```{r}
-df_temp_girl_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weights = "girl_weighted")
+df_temp_girl_weighted_12m <- calculate_temp_12m_stats_monthly_ave(df_temp_pop_weighted, weights = "girl_weighted")
 ```
 
 ## SPEI
@@ -224,19 +240,19 @@ df_temp_girl_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weig
 ### Raw SPEI
 
 ```{r}
-df_spei_12m <- calculate_spei_12m_stats(df_spei)
+df_spei_12m <- calculate_spei_12m_stats_monthly_ave(df_spei)
 ```
 
 ### Population Weighted UTCI
 
 ```{r}
-df_spei_pop_weighted_12m <- calculate_spei_12m_stats(df_spei_pop_weighted, weights = "pop_weighted")
+df_spei_pop_weighted_12m <- calculate_spei_12m_stats_monthly_ave(df_spei_pop_weighted, weights = "pop_weighted")
 ```
 
 ### Girl Population Weighted UTCI
 
 ```{r}
-df_spei_girl_weighted_12m <- calculate_spei_12m_stats(df_spei_girl_weighted, weights = "girl_weighted")
+df_spei_girl_weighted_12m <- calculate_spei_12m_stats_monthly_ave(df_spei_girl_weighted, weights = "girl_weighted")
 ```
 
 # Combine climate variables
@@ -303,8 +319,7 @@ df_clim_12m <- (
     aes(
       x = dev_value_temp_2m_max_above_1sd_12m, 
       fill = country
-    ),
-    color = "black"
+    )
   )
   + geom_histogram(
     position = "stack",
@@ -1463,5 +1478,5 @@ ggsave(
 # Save data
 
 ```{r}
-df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"))
+df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily_monthly_ave.csv"))
 ```
