@@ -192,7 +192,7 @@ Data obtained using the Climate Data Store API
 rast_spei <- terra::rast(
   file.path(
     raw_data_dir, 
-    "SPEI",
+    "climate/spei",
     "spei01.nc"
   )
 )
@@ -524,7 +524,6 @@ df_sex_debut_viz <- (
 )
 ```
 
-
 ## Counts of Sexual Debuts by year
 
 ```{r}
@@ -671,7 +670,6 @@ ggsave(
   filename = "rate_of_early_sexual_debut_by_year_by_admin1_zmb.png"
 )
 ```
-
 
 ```{r}
 #| fig-width: 9
@@ -844,6 +842,5 @@ ggsave(
 )
   
 ```
-
 
 ## Map

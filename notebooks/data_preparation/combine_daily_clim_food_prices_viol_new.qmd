@@ -1,0 +1,236 @@
+---
+title: "Combine climate data, food prices, and violence data"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed")
+model_data_dir <- root(proc_data_dir, "model_data")
+dir.create(model_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+viol_file <- sort(list.files(file.path(proc_data_dir, "VACS_clean"), pattern = "vacs_clean", full.names = TRUE), decreasing = TRUE)[[1]]
+
+# Settings
+nb_name <-  "Build final dataset"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+```
+
+```{r}
+print(paste("Using violence file:", viol_file))
+```
+
+# Import data
+
+## Population
+
+```{r}
+df_pop <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "population",
+      "adm_pop_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% mutate(
+    log_pop_density = log10(pop)
+  )
+  %>% select(
+    country,
+    adm_code,
+    adm_name,
+    log_pop_density
+  )
+)
+```
+
+## Climate
+
+The dataset contains entries for each day (note that the SPEI data occurs only once a month as it is on a monthly basis). To match it with the violence data we calculate the mean over all the entries in each month. This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
+
+```{r}
+df_clim <- (
+  read_csv(
+    file.path(proc_data_dir, "processed_utci_temp_spei_daily_monthly_ave.csv"),
+    show_col_types = FALSE
+  )
+  %>% group_by(
+    country,
+    adm_code,
+    adm_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    across(everything(), ~ mean(., na.rm = TRUE)),
+    .groups = "drop"
+  )
+)
+```
+
+## Food prices
+
+```{r}
+df_food_prices <- (
+  read_csv(
+    file.path(proc_data_dir, "food_prices", "food_prices_adm_12m.csv"),
+    show_col_types = FALSE
+  )
+  %>% select(
+    country,
+    adm_code,
+    adm_name,
+    date,
+    food_price_above_1sd,
+    food_price_anomaly,
+    food_price_above_1sd_12m,
+    food_price_anomaly_12m,
+    food_stress_12m
+  )
+)
+```
+
+## Violence
+
+```{r}
+df_viol <- (
+  read_csv(
+    viol_file,
+    show_col_types = FALSE
+  )
+  %>% filter(
+    !is.na(date),
+  )
+  %>% select(
+    -c(adm1_name, adm2_code, adm2_name)
+  )
+  %>% mutate(
+    date = ceiling_date(as.Date(date, format = "%Y-%m-%d"), "month") - days(1)
+  )
+  %>% rename(
+    adm_code = adm1_code
+  )
+)
+```
+
+# Combine datasets
+
+## Climate and Food Prices
+
+```{r}
+df_clim_fp <- (
+  df_clim
+  %>% merge(
+    df_food_prices,
+    by = c(
+      "country",
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% filter(
+    !is.na(food_price_anomaly)
+  )
+  %>% select(-adm_code)
+)
+```
+
+## All
+
+```{r}
+df_clim_fp_viol <- (
+  df_viol
+  %>% merge(
+    df_pop,
+    by = c(
+      "country",
+      "adm_code"
+    ),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_clim,
+    by = c(
+      "country", 
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_food_prices,
+    by = c(
+      "country",
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% select(-adm_code)
+)
+```
+
+```{r}
+(
+  df_clim_fp_viol
+  %>% filter(is.na(value_utci_max_above_1sd_12m))
+)
+```
+
+```{r}
+col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
+(
+  ggplot(
+    data = df_clim_fp_viol, 
+    aes(
+      # x = dev_value_utci_max_above_32_12m,
+      x = value_spei_below_m1_12m,
+      fill = country
+    )
+  )
+  + geom_histogram(
+    position = "stack"
+  )
+  + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 16),
+      axis.text.y = element_text(size = 15),
+      axis.text.x = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+    )
+  + scale_fill_manual(
+    values = col_palette
+  )
+)
+```
+
+# Save
+
+```{r}
+df_clim_fp %>% write_csv(file.path(model_data_dir, "climate_food_prices_new.csv"))
+df_clim_fp_viol %>% write_csv(file.path(model_data_dir, "climate_food_prices_violence_new.csv"))
+```

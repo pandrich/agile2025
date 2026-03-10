@@ -62,8 +62,8 @@ label_map <- c(
 )
 
 # Var settings
-clim_var <- "dev_value_pop_weighted_utci_max_above_32_12m"
-clim_label <- "temp_max_above_1sd"
+clim_var <- "dev_value_pop_weighted_utci_max_above_p85_12m"
+clim_label <- "dev_utci_above_p85"
 viol_var <- "sv"
 viol_label <- "all_viol"
 pop_label <- "adults"
@@ -192,7 +192,6 @@ sf_all <- (
   )
 )
 ```
-
 
 ## Climate & Violence
 
