@@ -835,19 +835,30 @@ plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points
       )
     ) 
     + geom_ribbon(
-      aes(ymin = lower2, ymax = upper2, fill = group), 
+      aes(
+        ymin = lower2, 
+        ymax = upper2, 
+        # fill = group
+      ), 
+      fill = col_palette[5],
       alpha = 0.3, 
       color = NA
     ) 
     + geom_ribbon(
-      aes(ymin = lower1, ymax = upper1, fill = group), 
+      aes(
+        ymin = lower1, 
+        ymax = upper1, 
+        # fill = group
+      ), 
+      fill = col_palette[5],
       alpha = 0.6, 
       color = NA
     ) 
     + geom_line(
-      mapping = aes(
-        color = group
-      ),
+      # mapping = aes(
+      #   color = group
+      # ),
+      color = col_palette[5],
       linewidth = 1
     )
     + ggh4x::facet_nested_wrap(
@@ -864,12 +875,12 @@ plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points
       limits = lims,
       labels = scales::percent_format(accuracy = 1)
     )
-    + paletteer::scale_color_paletteer_d(
-      "wesanderson::Zissou1"
-    )
-    + paletteer::scale_fill_paletteer_d(
-      "wesanderson::Zissou1"
-    )
+    # + paletteer::scale_color_paletteer_d(
+    #   "wesanderson::Zissou1"
+    # )
+    # + paletteer::scale_fill_paletteer_d(
+    #   "wesanderson::Zissou1"
+    # )
     + theme(
       panel.background = element_blank(),
       panel.grid = element_blank(),
@@ -885,10 +896,10 @@ plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points
       strip.text = element_text(size = 15),
       strip.background = element_blank()
     )
-    + guides(
-      color = "none",
-      fill = "none"
-    )
+    # + guides(
+    #   color = "none",
+    #   fill = "none"
+    # )
   )
   p
 }
