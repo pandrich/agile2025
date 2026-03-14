@@ -182,7 +182,7 @@ sf_zmb <- (
 sf_all <- (
   bind_rows(
     sf_zwe,
-    sf_zmb,
+    # sf_zmb,
   )
   %>% st_transform(3857)
   %>% mutate(
