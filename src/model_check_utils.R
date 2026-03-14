@@ -1,3 +1,81 @@
+extract_post <- function(model, pars) {
+  dfs = list()
+  post <- rstan::extract(model, pars = pars)
+  for (i in seq(1:length(pars))) {
+    ncols <- ncol(post[[pars[i]]])
+    if (is.na(ncols)) {
+      dfs[[i]] <- (
+        as.data.frame(post[[pars[i]]])
+        %>% set_names(pars[i])
+      )
+    } else {
+      dfs[[i]] <- (
+        as.data.frame(post[[pars[i]]])
+        %>% set_names(paste0(pars[i], "[", 1:ncols, "]"))
+      )
+    }
+  }
+  bind_cols(dfs)
+}
+
+extract_chains <- function(model, pars) {
+  dfs <- list()
+  chains_data <- rstan::extract(model, pars = pars, permuted = FALSE)
+  for (i in 1:dim(chains_data)[2]) {
+    chain <- chains_data[, i, ]
+    dfs[[i]] <- (
+      as_tibble(
+        matrix(
+          chain,
+          nrow = dim(chain)[1],
+          ncol = dim(chain)[2],
+          dimnames = list(
+            NULL,
+            names(chain[1, ])
+          )
+        )
+      )
+    )
+    param_levels <- names(dfs[[i]])
+    dfs[[i]] <- (
+      dfs[[i]]
+      %>% mutate(
+        chain = as.factor(i),
+        step = row_number()
+      )
+      %>% pivot_longer(cols = -c(step, chain), names_to = "parameter", values_to = "value")
+      %>% mutate(
+        parameter = factor(parameter, levels = param_levels),
+      )
+    )
+  }
+  bind_rows(dfs)
+}
+
+extract_ppc <- function(model, n_samples = 500, df_observed) {
+  ppc <- rstan::extract(model)$sv_pred[1:n_samples,]
+  rownames(ppc) <- 1:nrow(ppc)
+  df_ppc <- (
+    as_tibble(t(ppc))
+    %>% bind_cols(
+      country = df_observed$country,
+      adm_name = df_observed$adm_name,
+      rural = df_observed$rural,
+      over_18 = df_observed$over_18,
+      school_level = df_observed$school_level,
+      live_with_male_relative = df_observed$live_with_male_relative,
+      clim = df_observed$clim,
+      sv_true = df_observed$sv
+    )
+    %>% pivot_longer(
+      -(country:sv_true),
+      names_to = "sample",
+      values_to = "sv_pred"
+    )
+  )
+}
+
+
 create_ranef_df <- function(ranef_arr, group_name) {
   df <- as.data.frame.table(ranef_arr, responseName = "value", stringsAsFactors = FALSE)
   colnames(df)[1:3] <- c("iter", "level", "term")

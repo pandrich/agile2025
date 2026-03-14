@@ -775,7 +775,6 @@ plot(fit_nonranef, variable = "^b_rural", regex = TRUE, nvariables = 3)
 )
 ```
 
-
 #### Summary
 
 ```{r}

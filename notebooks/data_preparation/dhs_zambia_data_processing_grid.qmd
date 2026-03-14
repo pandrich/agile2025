@@ -44,7 +44,6 @@ coords <- list(
 )
 ```
 
-
 # Import Data
 
 ## Geometries
@@ -183,7 +182,6 @@ rast_spei <- terra::rast(
 
 ```
 
-
 # Process Data
 
 ## Zambia
@@ -216,7 +214,6 @@ start_date <- "1960-01-01"
 rast_spei_times <- terra::time(rast_spei)
 ids <- which(rast_spei_times >= start_date)
 ```
-
 
 ```{r}
 thresholds <- round(quantile(seq_along(ids), probs = c(0, 0.25, 0.5, 0.75, 1)))
@@ -758,7 +755,6 @@ write_csv(df_dhs_surv_adm_clim_zmb %>% select(-contains("utci")), file = file.pa
 )
 ```
 
-
 ### Assign climate to respondent - Sexual Debut
 
 ```{r}
@@ -1180,7 +1176,6 @@ p5 <- (
 # )
 ```
 
-
 ```{r}
 #| fig-width: 8
 #| fig-height: 10
@@ -1439,7 +1434,6 @@ p5 <- (
 #   filename = "num_utci_above_32_by_year_zmb.png"
 # )
 ```
-
 
 ```{r}
 #| fig-width: 8

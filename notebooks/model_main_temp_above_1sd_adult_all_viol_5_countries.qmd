@@ -47,7 +47,7 @@ set.seed(seed)
 # Viz settings
 col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
 label_map <- c(
-  tolerate_women_violence = "Tolerate violence",
+  # tolerate_women_violence = "Tolerate violence",
   live_with_partner = "Live with partner",
   live_with_father = "Live with father",
   in_school = "In school",
@@ -75,7 +75,7 @@ covars <- c(
   "age",
   "school_level",
   "live_with_partner",
-  "tolerate_women_violence",
+  # "tolerate_women_violence",
   viol_var
 )
 vars <- c(covars, clim_var)

@@ -89,6 +89,23 @@ df_clim <- (
 )
 ```
 
+```{r}
+unique(
+  df_clim
+  %>% filter(country == "Zambia")
+  %>% pull(adm2_code)
+)
+```
+
+```{r}
+unique(
+  df_viol_zmb
+  %>% filter(country == "Zambia")
+  %>% pull(adm2_code)
+)
+```
+
+
 ## Violence
 
 ```{r}

@@ -1,4 +1,105 @@
 
+plot_traces <- function(model, pars, label_mapping = NULL) {
+  df_chains <- extract_chains(model, pars)
+  if (!is.null(label_mapping)) {
+    df_chains <- (
+      df_chains
+      %>% mutate(
+        parameter = recode(
+          parameter,
+          !!!label_mapping
+        )
+      )
+    )
+  }
+  (
+    df_chains
+    %>% ggplot()
+    + geom_line(
+      aes(x = step, y = value, color = chain), 
+      alpha = 1
+    )
+    + facet_wrap(
+      ~ parameter,
+      ncol = 3,
+      scales = "free",
+      labeller = label_parsed
+    )
+    + theme(
+      panel.background = element_blank(),
+      panel.grid = element_blank(),
+      panel.spacing = unit(0.8, "lines"),
+      plot.background = element_blank(),
+      plot.title = element_text(size = 20),
+      plot.subtitle = element_text(size = 18),
+      panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+      strip.background = element_blank(),
+      strip.text = element_text(size = 15),
+      axis.ticks.length = unit(4, "pt"),
+      axis.ticks = element_line(linewidth = 1),
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 15),
+      legend.background = element_blank(),
+      legend.title = element_text(size = 18),
+      legend.text = element_text(size = 15)
+    )
+    +scale_color_brewer(
+      name = "Chains",
+      palette = "Reds",
+      direction = -1
+    )
+    + scale_size(range=c(1, 2), guide=FALSE)
+    + scale_y_continuous(
+      breaks = pretty_breaks(n = 2)
+    )
+    + scale_x_continuous(
+      breaks = pretty_breaks(n = 3)
+    )
+    + labs(
+      x = "MCMC Iteration",
+      y = "Value"
+    )
+    + guides(
+      color = guide_legend(override.aes = list(linewidth = 4)),
+    )
+  )
+}
+
+plot_post_pairs <- function(model, pars, label_mapping = NULL) {
+  df_post <- extract_post(model, pars)
+  if (!is.null(label_mapping)) {
+    names(df_post) <- label_mapping[names(df_post)]
+  }
+  (
+    ggpairs(
+      df_post,
+      lower = list(continuous = wrap("points", alpha = 0.1, pch=21, fill = col_palette[6]), color = col_palette[5]),
+      upper = list(continuous = wrap("density", color = col_palette[5])),
+      diag = list(continuous = wrap("barDiag", fill = col_palette[5], alpha = 0.7, bins = 20)),
+      progress = FALSE,
+      labeller = label_parsed
+    )
+    + theme(
+      panel.background = element_blank(),
+      panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
+      panel.spacing = unit(0.5, "lines"),
+      strip.background = element_blank(),
+      strip.text = element_text(size = 13),
+      axis.ticks.length = unit(4, "pt"),
+      axis.ticks = element_line(linewidth = 1),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+      axis.text.y = element_text(size = 14),
+      axis.title = element_text(size = 14),
+    )
+    + scale_y_continuous(
+      breaks = pretty_breaks(n = 3)
+    )
+    + scale_x_continuous(
+      breaks = pretty_breaks(n = 3)
+    )
+  )
+}
+
 plot_ppc_overlay <- function(fit, data, outcome_var, n_samples = 500, common_legend = TRUE, title = NA) {
   strip_theme <- theme(
     plot.title = element_text(size = 14),
@@ -101,6 +202,48 @@ plot_ppc_overlay <- function(fit, data, outcome_var, n_samples = 500, common_leg
   )
 
   p
+}
+
+plot_psis_diagnostics <- function(loo, df_observed, title = "") {
+  ks <- loo$pointwise[, "influence_pareto_k"]
+  (
+    tibble(
+      degurba = df_observed$degurba,
+      ks = ks
+    )
+    %>% arrange(degurba)
+    %>% mutate(
+      degurba = as.factor(degurba),
+      n = 1:n()
+    )
+    %>% ggplot()
+    + plot_theme
+    + theme(
+      legend.position = "right"
+    )
+    + geom_point(
+      aes(
+        x = n,
+        y = ks,
+        color = degurba
+      )
+    )
+    + geom_hline(yintercept = 1.0, linetype = "dashed", color = "firebrick", linewidth = 1)
+    + geom_hline(yintercept = 0.7, linetype = "dotted", color = "lightcoral", linewidth = 1)
+    + scale_color_manual(
+      labels = ur_labels,
+      values = ur_colors
+    )
+    + labs (
+      x = "Data point",
+      y = "Pareto shape k",
+      color = "Degree of urbanisation", 
+      title = title
+    )
+    + guides(
+      color = guide_legend(override.aes = list(size = 4))
+    )
+  )
 }
 
 plot_ppc_rootogram <- function(fit, data, outcome_var, cred1 = 0.5, cred2 = 0.95) {
