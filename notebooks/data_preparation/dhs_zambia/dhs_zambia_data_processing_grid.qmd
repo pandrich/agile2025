@@ -1,5 +1,5 @@
 ---
-title: "DHS Zambia Data Processing"
+title: "Process Climate for Zambia"
 format: html
 editor: visual
 ---
@@ -16,32 +16,19 @@ library(ggtext)
 library(scales)
 
 # Set random seed
-nb_name <- "Agile 2025 - Analysis of the Uganda call centre data"
+nb_name <- "Generate combined Zambia climate-DHS dataset"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 
 # Folder structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
+clim_data_dir <- root("data/processed/climate")
 proc_data_dir <- root("data/processed/DHS")
 dir.create(proc_data_dir, showWarnings = FALSE)
 fig_dir <- root("figures")
 
 # Viz settings
 col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#97DECE", "#35A29F")
-```
-
-# Parameters
-
-```{r}
-coords <- list(
-  "MOZ" = c(30, 41.2, -26.9, -10.3),
-  "ZWE" = c(25.2, 33.1, -22.5, -15.45),
-  "LSO" = c(26.99, 29.46, -30.68, -28.55),
-  "NAM" = c(11.65, 25.27, -29, -16.9),
-  "ZMB" = c(21.95, 33.8, -18.1, -8.15),
-  "UGA" = c(29.55, 35.05, -1.49, 4.22),
-  "KEN" = c(33.90, 41.92, -4.68, 5.05)
-)
 ```
 
 # Import Data
@@ -96,7 +83,7 @@ df_dhs_surv_zmb <- (
     file.path(
       raw_data_dir,
       "DHS",
-      "data_from_Diana_2.csv"
+      "data_from_Diana_4.csv"
     ),
     show_col_type = FALSE
   )
@@ -130,9 +117,13 @@ df_dhs_surv_zmb <- (
     year_of_sexual_debut = year(date %m-% years(years_since_sexual_debut))
   )
   %>% select(
+    case_id,
+    line_number,
     cluster = clustre_num,
+    household_num,
+    sample_strata,
+    primary_sampling_unit,
     date,
-    household = household_num,
     weight = weight_household,
     rural,
     female,
@@ -146,7 +137,11 @@ df_dhs_surv_zmb <- (
     year_of_sexual_debut,
     num_sex_partners,
     condom_last_sex,
-    ever_hiv_tested
+    ever_hiv_tested,
+    sti_symptoms,
+    genital_sores = gential_sores,
+    discharge,
+    partner_age
   )
 )
 ```
@@ -164,22 +159,40 @@ df_dhs_surv_zmb <- (
 
 ## SPEI
 
-Data obtained using the Climate Data Store API
+### Grid Map
 
 ```{r}
-rast_spei <- terra::rast(
-  file.path(
-    raw_data_dir, 
-    "SPEI",
-    "spei01.nc"
+spei_grid_map_zmb <- st_read(file.path(clim_data_dir, "spei_zmb_grid_map.geojson"))
+```
+
+### SPEI by tile
+
+```{r}
+df_spei_grid_zmb <- (
+  read_csv(
+    file = file.path(clim_data_dir, "spei_zmb_by_tile.csv"),
+    show_col_types = FALSE
   )
 )
 ```
 
 ## UTCI
 
-```{r}
+### Grid Map
 
+```{r}
+utci_grid_map_zmb <- st_read(file.path(clim_data_dir, "utci_zmb_grid_map.geojson"))
+```
+
+### SPEI by tile
+
+```{r}
+df_utci_grid_zmb <- (
+  read_csv(
+    file = file.path(clim_data_dir, "utci_zmb_by_tile.csv"),
+    show_col_types = FALSE
+  )
+)
 ```
 
 # Process Data
@@ -206,50 +219,6 @@ df_dhs_adm_zmb <- (
 ```
 
 ### SPEI
-
-#### Create dataset
-
-```{r}
-start_date <- "1960-01-01"
-rast_spei_times <- terra::time(rast_spei)
-ids <- which(rast_spei_times >= start_date)
-```
-
-```{r}
-thresholds <- round(quantile(seq_along(ids), probs = c(0, 0.25, 0.5, 0.75, 1)))
-sfs_spei <- list()
-for (i in seq_along(ids)) {
-  if (i %in% thresholds) {
-    thresh_idx <- which(thresholds == i)
-    print(paste0(names(thresh_idx), " complete"))
-  }
-  sfs_spei[[i]] <- (
-    rast_spei
-    %>% terra::subset(ids[[i]])
-    %>% terra::crop(terra::ext(coords[["ZMB"]]))
-    %>% terra::as.polygons(aggregate = FALSE)
-    %>% st_as_sf()
-    %>% mutate(
-      spei_tile_code = row_number(),
-      date = as.Date(rast_spei_times[[ids[[i]]]])
-    )
-    %>% rename(
-      spei = 1
-    )
-    %>% select(
-      spei_tile_code,
-      date,
-      spei
-    )
-  )
-}
-spei_grid_map_zmb <- sfs_spei[[i]] %>% select(spei_tile_code)
-df_spei_grid_zmb <- (
-  bind_rows(sfs_spei)
-  %>% as_tibble()
-  %>% select(-geometry)
-)
-```
 
 #### Assign tile to clusters
 
@@ -430,43 +399,6 @@ df_spei_yearly_zmb <- (
 
 ### UTCI
 
-#### Create dataset
-
-```{r}
-rast_files <- list.files(file.path(raw_data_dir, "climate/utci/daily/ZMB"), pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
-thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
-sfs_utci <- list()
-for (i in seq_along(rast_files)) {
-  if (i %in% thresholds) {
-    thresh_idx <- which(thresholds == i)
-    print(paste0(names(thresh_idx), " complete"))
-  }
-  rast_utci <- terra::rast(rast_files[[i]])["utci_daily_max"]
-  date <- terra::time(rast_utci)[[1]]
-  sfs_utci[[i]] <- (
-    rast_utci
-    %>% terra::as.polygons(aggregate = FALSE)
-    %>% st_as_sf()
-    %>% mutate(
-      utci_tile_code = row_number(),
-      date = as.Date(date, format = "%Y-%m-%d"),
-      utci_daily_max = utci_daily_max - 273.15
-    )
-    %>% select(
-      utci_tile_code,
-      date,
-      utci_daily_max
-    )
-  )
-}
-utci_grid_map_zmb <- sfs_utci[[i]] %>% select(utci_tile_code)
-df_utci_grid_zmb <- (
-  bind_rows(sfs_utci)
-  %>% as_tibble()
-  %>% select(-geometry)
-)
-```
-
 #### Assign tile to clusters
 
 ```{r}
@@ -643,7 +575,7 @@ df_utci_yearly_zmb <- (
 )
 ```
 
-### Assign tiles to respondents
+### Assign tile to respondents
 
 ```{r}
 df_dhs_surv_tile_zmb <- (
@@ -799,6 +731,194 @@ df_sex_debut_adm_zmb <- (
 
 # Viz
 
+## SPEI
+
+```{r}
+theme <- theme(
+  panel.background = element_blank(),
+  panel.border = element_blank(),
+  panel.grid = element_blank(),
+  plot.background = element_blank(),
+  plot.title = element_text(size = 18, hjust = 0.5),
+  axis.title = element_blank(),
+  axis.text = element_blank(),
+  axis.ticks = element_blank(),
+  legend.title = element_text(size = 16),
+  legend.text = element_text(size = 14)
+)
+
+fill_scale_abs <- scale_fill_paletteer_c(
+  palette = "grDevices::heat.colors",
+  direction = -1,
+  limits = range(
+    c(
+      sf_dhs_surv_adm_clim_zmb$value_spei_below_1sd_12m,
+      sf_dhs_surv_adm_clim_zmb$value_spei_below_m1_12m
+    ),
+    na.rm = TRUE
+  )
+)
+
+fill_scale_dev <- scale_fill_paletteer_c(
+  palette = "ggthemes::Orange-Blue-White Diverging",
+  direction = -1,
+  limits = range(
+    c(
+      sf_dhs_surv_adm_clim_zmb$dev_value_spei_below_1sd_12m,
+      sf_dhs_surv_adm_clim_zmb$dev_value_spei_below_m1_12m
+    ),
+    na.rm = TRUE
+  )
+)
+
+sf_dhs_surv_adm_clim_zmb <- (
+  df_dhs_surv_adm_clim_zmb
+  %>% group_by(adm1_name, adm2_name)
+  %>% summarise(
+    value_spei_below_1sd_12m = mean(value_spei_below_1sd_12m, na.rm = TRUE),
+    value_spei_below_m1_12m = mean(value_spei_below_m1_12m, na.rm = TRUE),
+    dev_value_spei_below_1sd_12m = mean(dev_value_spei_below_1sd_12m, na.rm = TRUE),
+    dev_value_spei_below_m1_12m = mean(dev_value_spei_below_m1_12m, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+  %>% merge(
+    sf_zmb,
+    by = c("adm1_name", "adm2_name"),
+    all.x = TRUE
+  )
+  %>% st_as_sf()
+)
+```
+
+
+```{r}
+p1 <- (
+  sf_dhs_surv_adm_clim_zmb
+  %>% rename(
+    num_months = value_spei_below_1sd_12m
+  )
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(
+      fill = num_months
+    )
+  )
+  + theme
+  + fill_scale_abs
+  + labs(
+    title = "SPEI >1sd below mean",
+    fill = "# Months"
+  )
+)
+
+p2 <- (
+  sf_dhs_surv_adm_clim_zmb
+  %>% rename(
+    num_months = value_spei_below_m1_12m
+  )
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(
+      fill = num_months
+    )
+  )
+  + theme
+  + fill_scale_abs
+  + labs(
+    title = "SPEI < -1",
+    fill = "# Months"
+  )
+)
+
+p3 <- (
+  sf_dhs_surv_adm_clim_zmb
+  %>% rename(
+    dev_num_months = dev_value_spei_below_1sd_12m
+  )
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(
+      fill = dev_num_months
+    )
+  )
+  + theme
+  + theme(
+    plot.title = element_blank()
+  )
+  + fill_scale_dev
+  + labs(
+    # title = "SPEI >1sd below mean",
+    fill = "# Months (dev.)"
+  )
+)
+
+p4 <- (
+  sf_dhs_surv_adm_clim_zmb
+  %>% rename(
+    dev_num_months = dev_value_spei_below_m1_12m
+  )
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(
+      fill = dev_num_months
+    )
+  )
+  + theme
+  + theme(
+    plot.title = element_blank()
+  )
+  + fill_scale_dev
+  + labs(
+    # title = "SPEI < -1",
+    fill = "# Months (dev.)"
+  )
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+
+design <- "
+  AB
+  CD
+"
+
+(
+  (p1+p2+p3+p4)
+  + plot_layout(
+    design = design,
+    guides = "collect"
+  )
+)
+      
+ggsave(
+  path = fig_dir,
+  filename = "spei_maps.png"
+)
+```
+
+
+
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3.5
+
+p1
+
+ggsave(
+  path = fig_dir,
+  filename = "value_spei_below_1sd_12m_map.png"
+)
+```
+
+
+## Sexual Debut
+
+
 ```{r}
 df_sex_debut_viz <- (
   df_sex_debut_adm_zmb
@@ -820,8 +940,6 @@ df_sex_debut_viz <- (
   )
 )
 ```
-
-## Sexual Debut
 
 ### Counts of Sexual Debuts by year
 

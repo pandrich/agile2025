@@ -1,0 +1,1302 @@
+---
+title: "Model main UTCI effect on all sexual violence, adults"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(spdep)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(ggdist)
+library(bayesplot)
+library(tidybayes)
+# theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
+library(patchwork)
+library(paletteer)
+library(tidytext)
+library(reliabilitydiag)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+temp_dir <- root("temp")
+dir.create(temp_dir, showWarnings = FALSE)
+raw_data_dir <- root("data/raw")
+model_data_dir <- root("data/processed/model_data")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+src_dir <- root("src")
+```
+
+# Notebook settings
+
+```{r}
+# Settings
+nb_name <-  "Model main UTCI effect on all sexual violence, adults"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
+label_map <- c(
+  live_with_partner = "Live with partner",
+  school_level = "Schooling level",
+  rural = "Rural area",
+  age = "Age",
+  clim = "Num. Excess Hot Days (past year)"
+)
+
+# Var settings
+countries <- c(
+  "Lesotho",
+  "Mozambique", 
+  "Namibia",
+  "Zambia",
+  "Zimbabwe"
+)
+clim_var <- "dev_value_pop_weighted_utci_max_above_1sd_12m"
+clim_label <- "utci_max_above_1sd"
+viol_var <- "sv"
+viol_label <- "all_viol"
+pop_label <- "adults"
+covars <- c(
+  "sample_weight",
+  "country",
+  "adm_name",
+  "rural",
+  "age",
+  "school_level",
+  "live_with_partner",
+  viol_var
+)
+vars <- c(covars, clim_var)
+
+bin_covs <- c(
+  "rural",
+  "live_with_partner" 
+)
+mono_covs <- c(
+  "age",
+  "school_level"
+)
+cont_covs <- c(
+  "clim"
+)
+
+vars_to_comp <- c(
+  "b_asv",
+  "b_lsv",
+  "b_scsv",
+  "b_rsv",
+  "b_clsv_mu",
+  "b_clsv[1]",
+  "b_clsv[2]",
+  "b_clsv[3]",
+  "b_clsv[4]",
+  "b_clsv[5]"
+)
+
+# Computation settings
+adapt_delta = 0.95
+```
+
+# Functions
+
+```{r}
+source(file.path(src_dir, "viz.R"))
+source(file.path(src_dir, "model_check_utils.R"))
+
+standardize <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+```
+
+# Import Data
+
+## Geometries
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb,
+  )
+  %>% st_transform(3857)
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = st_coordinates(centroid)[,1],
+    lat = st_coordinates(centroid)[,2]
+  )
+)
+```
+
+## Climate
+
+```{r}
+df_clim <- (
+  read_csv(
+    file.path(
+      model_data_dir,
+      "climate_food_prices.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% filter(
+    country %in% countries
+  )
+)
+```
+
+## Climate & Violence
+
+```{r}
+df_clim_viol <- (
+  read_csv(
+    file.path(
+      model_data_dir,
+      "climate_food_prices_violence.csv"
+    ),
+    show_col_type = FALSE
+  )
+  %>% filter(
+    !is.na(sample_weight),
+    country %in% countries
+  )
+  %>% group_by(country)
+  %>% mutate(
+    country_sample_weight = sum(sample_weight, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sample_weight = (
+      1E-3 
+      * sample_weight 
+      * (
+        sum(sample_weight, na.rm = TRUE) 
+        / (length(unique(country)) * country_sample_weight)
+      )
+    )
+  )
+  %>% select(
+    -c(
+      live_with_father, 
+      live_with_mother,
+    )
+  )
+)
+```
+
+# Prepare Data
+
+## Restrict locations
+
+```{r}
+sf_vacs <- (
+  sf_all
+  %>% filter(
+    country %in% (df_clim_viol$country %>% unique()),
+    adm_name %in% (df_clim_viol$adm_name %>% unique())
+  )
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = standardize(st_coordinates(centroid)[,1]),
+    lat = standardize(st_coordinates(centroid)[,2])
+  )
+)
+```
+
+## Extract model subsets
+
+```{r}
+df_model <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+    age >= 19
+  )
+  %>% select(all_of(vars))
+  %>% na.omit()
+  %>% merge(
+    sf_vacs %>% as.data.frame() %>% select(country, adm_name, lon, lat),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = factor(country),
+    adm_name = factor(adm_name),
+    rel_age = as.integer(age - min(age)),
+    rel_age_ord = factor(
+      rel_age,
+      levels = sort(unique(rel_age)),
+      ordered = TRUE
+    ),
+    school_level = factor(
+      school_level, 
+      levels = sort(unique(school_level)),
+      ordered = TRUE
+    ),
+    clim := scale(!!sym(clim_var)),
+    x = standardize(lon),
+    y = standardize(lat)
+  )
+  # %>% group_by(adm_name)
+  # %>% sample_frac(0.2)
+  # %>% ungroup()
+)
+```
+
+## Final data for stan models
+
+```{r}
+num_hsgp_bases <- 16
+indices <- matrix(data = NA, num_hsgp_bases^2, 2)
+mm = 0
+for (m1 in 1:num_hsgp_bases) {
+  for (m2 in 1:num_hsgp_bases) {
+    mm = mm + 1
+    indices[mm,] = c(m1, m2)
+  }
+}
+
+data_list <- list(
+  N = nrow(df_model),
+  N_c = length(unique(df_model$country)),
+  N_adm = length(unique(df_model$adm_name)),
+  N_A = length(unique(df_model$rel_age_ord)),
+  N_sc = length(unique(df_model$school_level)),
+  W = df_model$sample_weight,
+  co = as.numeric(df_model$country),
+  adm = as.numeric(df_model$adm_name),
+  R = df_model$rural,
+  A = as.numeric(df_model$rel_age_ord),
+  sc = as.numeric(df_model$school_level), 
+  par = df_model$live_with_partner, 
+  cl = as.numeric(df_model$clim),
+  sv = df_model$sv,
+  M = num_hsgp_bases,
+  M_nD = num_hsgp_bases^2,
+  L = c(5/2*max(df_model$x), 5/2*max(df_model$y)),
+  indices = indices,
+  X = cbind(df_model$x, df_model$y)
+)
+```
+
+# Viz
+
+```{r}
+#| fig-width: 6
+#| fig-height: 7
+(
+  ggplot()
+  + geom_histogram(
+    data = df_clim,
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim"
+    ),
+    alpha = 0.7,
+    binwidth = 5
+  )
+  + geom_histogram(
+    data = df_clim_viol,
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim_viol"
+    ),
+    alpha = 0.6,
+    binwidth = 5
+  )
+  + geom_vline(
+    xintercept = 0,
+    color = "black",
+    linetype = "dashed"
+  )
+  + facet_wrap(
+    ~ country,
+    ncol = 1
+  )
+  + scale_fill_manual(
+    values = c(
+      "clim" = col_palette[2],
+      "clim_viol" = col_palette[5]
+    ),
+    labels = c(
+      "clim" = "Climate variable distribution",
+      "clim_viol" = "Climate at survey"
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 13),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 13),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 13),
+  )
+  + labs(
+    y = "Counts (norm.)",
+    x = "Excess hot days"
+  )
+)
+```
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+(
+  ggplot()
+  + geom_histogram(
+    data = df_clim %>% filter(country == "Namibia"),
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim"
+    ),
+    alpha = 0.7,
+    binwidth = 5
+  )
+  + geom_histogram(
+    data = df_clim_viol %>% filter(country == "Namibia"),
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim_viol"
+    ),
+    alpha = 0.6,
+    binwidth = 5
+  )
+  + geom_vline(
+    xintercept = 0,
+    color = "black",
+    linetype = "dashed"
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 4
+  )
+  + scale_fill_manual(
+    values = c(
+      "clim" = col_palette[2],
+      "clim_viol" = col_palette[5]
+    ),
+    labels = c(
+      "clim" = "Climate variable distribution",
+      "clim_viol" = "Climate at survey"
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 13),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 13),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.position = "inside",
+    legend.position.inside = c(0.5, 0.1)
+  )
+  + labs(
+    y = "Counts (norm.)",
+    x = "Excess hot days"
+  )
+)
+```
+
+```{r}
+df_clim_viol_summ <- (
+  df_clim_viol
+  %>% group_by(country, adm_name)
+  %>% summarise(
+    clim = mean(!!sym(clim_var), na.rm = TRUE),
+    rural = sum(rural * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    live_with_partner = sum(live_with_partner * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    age = sum(age * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    school_level = sum(school_level * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    sv = sum(sv * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% merge(
+    sf_all,
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% st_as_sf()
+)
+```
+
+```{r}
+#| fig-width: 14
+#| fig-height: 6
+p1 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = clim),
+    color = "transparent"
+  )
+  + scale_fill_viridis_c(
+    option = "magma"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Excess heat days"
+  )
+)
+
+p2 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = age),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Greys",
+    # labels = scales::label_percent(accuracy = 1)
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Mean Age"
+  )
+)
+
+p3 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = rural),
+    color = "transparent"
+  )
+  + scale_fill_paletteer_c(
+    palette = "ggthemes::Orange-Blue Diverging",
+    labels = scales::label_percent(accuracy = 1),
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Rural level"
+  )
+)
+
+p4 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = live_with_partner),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Blues",
+    direction = -1,
+    labels = scales::label_percent(accuracy = 1)
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Live with male relative"
+  )
+)
+
+p5 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = school_level),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Greens",
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "School Attainment"
+  )
+)
+
+p6 <- (
+  ggplot(data = df_clim_viol_summ)
+  + geom_sf(
+    mapping = aes(fill = sv),
+    color = "transparent"
+  )
+  + scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::label_percent(accuracy = 1)
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Mean SV"
+  )
+)
+
+# layout <- "
+#   ABE
+#   CDE
+# "
+layout <- "
+  ABC
+  DEF
+"
+
+(
+  p3 + p2 + p5 + p4 + p1 + p6
+  + plot_layout(
+    # widths = c(1, 1, 1.5),
+    design = layout
+  )
+)
+  
+ggsave(
+  path = fig_dir,
+  filename = paste0("variable_comparison_", clim_label, "_", pop_label, "_", viol_label, ".png")
+)
+```
+
+```{r}
+#| fig-width: 10
+#| fig-height: 3
+(
+  df_model
+  %>% group_by(country, adm_name)
+  %>% summarise(
+    clim = mean(!!sym(clim_var), na.rm = TRUE),
+    sv = mean(sv, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+  %>% ggplot()
+  + geom_point(
+    mapping = aes(
+      x = clim,
+      y = sv
+    ),
+    color = col_palette[5],
+    size = 1.5
+  )
+  + geom_smooth(
+    mapping = aes(
+      x = clim,
+      y = sv
+    ),
+    color = col_palette[6],
+    fill = col_palette[6],
+    method = "lm",
+    formula = "y ~ x",
+    linewidth = 1.2,
+  )
+  + facet_wrap(
+    ~country,
+    nrow = 1,
+    scales = "free_x"
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 13),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 13),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 13),
+  )
+)
+```
+
+# Modeling
+
+## Only random intercept by admin 1 level
+
+```{r}
+pars_ranint_adm <- c(
+  "b_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_adm_mu",
+  "b_adm_sd",
+  "b_adm"
+)
+```
+
+```{r}
+m_ranint_adm <- rstan::stan(
+  file = file.path(mod_dir, "random_int_adm_adults.stan"),
+  data = data_list,
+  model_name = "m_ranint_adm",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranint_adm, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranint_adm), 
+  pars = c(
+    "b_co[2]",
+    "b_adm[2]"
+  ),
+  np = nuts_params(m_ranint_adm),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranint_adm, 
+  pars = pars_ranint_adm,
+  probs = c(0.025, 0.975)
+)
+```
+
+```{r}
+mean_adm_re <- (
+  m_ranint_adm
+  %>% as_draws_df()
+  %>% select(contains("b_adm["))
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    mean = mean(value, na.rm = TRUE)
+  )
+  %>% pull(mean)
+)
+
+heat_adm <- (
+  df_model
+  %>% group_by(adm_name)
+  %>% summarise(
+    clim = mean(clim, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% arrange(adm_name)
+  %>% pull(clim)
+)
+```
+
+```{r}
+cor(mean_adm_re, heat_adm)
+```
+
+```{r}
+form <- bf(bl ~ heat)
+fit_bl_h <- brm(
+  formula = form,
+  data = data.frame(list(bl = mean_adm_re, heat = heat_adm)),
+  family = gaussian()
+)
+```
+
+
+## Fixed effects: country \* climate \* age
+
+```{r}
+pars_fixed_country_age <- c(
+  "a",
+  "b_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl"
+)
+```
+
+```{r}
+m_fixed_country_age <- rstan::stan(
+  file = file.path(mod_dir, "fixed_effects_country_age_adults.stan"),
+  data = data_list,
+  model_name = "m_fixed_country_age",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_fixed_country_age, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_fixed_country_age), 
+  pars = c(
+    "b_co[2]",
+    "b_cl[2]"
+  ),
+  np = nuts_params(m_fixed_country_age),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_fixed_country_age, 
+  pars = pars_fixed_country_age,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Random intercept and slope by country
+
+```{r}
+pars_ranef_country_age <- c(
+  "b_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl"
+)
+```
+
+```{r}
+m_ranef_country_age <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_country_age_adults.stan"),
+  data = data_list,
+  model_name = "m_ranef_country_age",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_country_age, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_country_age), 
+  pars = c(
+    "b_co[2]",
+    "b_cl[2]"
+  ),
+  np = nuts_params(m_ranef_country_age),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_country_age, 
+  pars = pars_ranef_country_age,
+  probs = c(0.025, 0.975)
+)
+```
+
+### Variable analysis
+
+```{r}
+(
+  m_ranef_country_age
+  %>% as_draws_df()
+  %>% select(all_of(vars_to_comp))
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    variable = factor(variable, levels = vars_to_comp)
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    mean = mean(value, na.rm = TRUE),
+    pl0 = mean(value < 0, na.rm = TRUE),
+    pg0 = mean(value > 0, na.rm = TRUE)
+  )
+)
+```
+
+## Random intercept and slope by country, correlated intercepts and slopes
+
+```{r}
+pars_ranef_country_age_corr <- c(
+  "a",
+  "b_co",
+  "b_co_sd",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho"
+)
+```
+
+```{r}
+m_ranef_country_age_corr <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_country_age_corr_adults.stan"),
+  data = data_list,
+  model_name = "m_ranef_country_age_corr",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_country_age_corr, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_country_age_corr), 
+  pars = c(
+    "b_cosv[1]",
+    "b_clsv[1]"
+  ),
+  np = nuts_params(m_ranef_country_age_corr),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_country_age_corr, 
+  pars = pars_ranef_country_age_corr,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Random effects + HSGP
+
+```{r}
+pars_ranef_gp <- c(
+  "b_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "delta",
+  "sigma"
+)
+```
+
+```{r}
+m_ranef_gp <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_country_age_gp_adults.stan"),
+  data = data_list,
+  model_name = "m_ranef_gp",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_gp, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_gp), 
+  pars = c(
+    "b_cosv[2]",
+    "b_clsv[2]"
+  ),
+  np = nuts_params(m_ranef_gp),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_gp, 
+  pars = pars_ranef_gp,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Total climate effect
+
+```{r}
+pars_ranef_tot_eff <- c(
+  "a",
+  "b_co_mu",
+  "b_co_sd",
+  "b_co",
+  "b_r",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho"
+)
+```
+
+```{r}
+m_ranef_tot_eff <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_total_effect.stan"),
+  data = data_list,
+  model_name = "m_ranef_tot_eff",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_tot_eff, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_tot_eff), 
+  pars = c(
+    "b_co[1]",
+    "b_cl[1]"
+  ),
+  np = nuts_params(m_ranef_tot_eff),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_tot_eff, 
+  pars = pars_ranef_tot_eff,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Total climate effect, with adm random effects
+
+```{r}
+pars_ranef_tot_eff_adm <- c(
+  "a",
+  "b_co_mu",
+  "b_co_sd",
+  "b_co",
+  "b_adm_mu",
+  "b_adm_sd",
+  "b_r",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho"
+)
+```
+
+```{r}
+m_ranef_tot_eff_adm <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_total_effect_adm.stan"),
+  data = data_list,
+  model_name = "m_ranef_tot_eff_adm",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_tot_eff_adm, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_tot_eff_adm), 
+  pars = c(
+    "b_co[1]",
+    "b_cl[1]"
+  ),
+  np = nuts_params(m_ranef_tot_eff_adm),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_tot_eff_adm, 
+  pars = pars_ranef_tot_eff_adm,
+  probs = c(0.025, 0.95)
+)
+```

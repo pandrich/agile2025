@@ -62,6 +62,13 @@ label_map <- c(
 )
 
 # Var settings
+countries <- c(
+  "Lesotho",
+  "Mozambique", 
+  "Namibia",
+  "Zambia",
+  "Zimbabwe"
+)
 clim_var <- "dev_value_pop_weighted_temp_2m_max_above_1sd_12m"
 clim_label <- "temp_max_above_1sd"
 viol_var <- "sv"
@@ -209,8 +216,8 @@ sf_all <- (
   bind_rows(
     sf_moz,
     sf_zwe,
-    # sf_lso,
-    # sf_nam,
+    sf_lso,
+    sf_nam,
     sf_zmb,
   )
   %>% st_transform(3857)
@@ -253,9 +260,7 @@ df_clim_viol <- (
   )
   %>% filter(
     !is.na(sample_weight),
-    country %in% c("Mozambique", "Zimbabwe", "Zambia")
-    # !(country %in% c("Kenya", "Lesotho"))
-    # country != "Kenya"
+    country %in% countries
   )
   %>% group_by(country)
   %>% mutate(
@@ -285,7 +290,7 @@ df_clim_viol <- (
 (
   ggplot()
   + geom_histogram(
-    data = df_clim %>% filter(country != "Uganda"),
+    data = df_clim,
     mapping = aes(
       y = after_stat(ncount),
       x = !!sym(clim_var),

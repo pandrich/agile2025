@@ -255,14 +255,14 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      sd_clim = (temp_2m_max - hist_mean) / hist_sd,
-      above_1sd = as.numeric(sd_clim > 1),
+      sd_temp = (temp_2m_max - hist_mean) / hist_sd,
+      above_1sd = as.numeric(sd_temp > 1),
       above_p85 = as.numeric(temp_2m_max > p85),
       above_p90 = as.numeric(temp_2m_max > p90),
       above_p95 = as.numeric(temp_2m_max > p95),
       above_32 = as.numeric(temp_2m_max > 32)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim, p85, p90, p95))
+    %>% select(-c(hist_mean, hist_sd, sd_temp, p85, p90, p95))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
@@ -278,6 +278,13 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
           )
         ),
         .names = "{.col}_12m"
+      ),
+      mean_temp_2m_max_12m = slider::slide_index_dbl(
+        .x = temp_2m_max,
+        .i = date,
+        .f = ~ mean(.x, na.rm = TRUE),
+        .before = ~ .x %m-% months(12),
+        .complete = TRUE
       )
     )
     %>% ungroup()
@@ -398,14 +405,14 @@ calculate_spei_12m_stats <- function(df_spei, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      sd_clim = (spei - hist_mean) / hist_sd,
-      below_1sd = as.numeric(sd_clim < -1),
+      sd_spei = (spei - hist_mean) / hist_sd,
+      below_1sd = as.numeric(sd_spei < -1),
       below_p05 = as.numeric(spei < p05),
       below_p10 = as.numeric(spei < p10),
       below_p15 = as.numeric(spei < p15),
       below_m1 = as.numeric(spei < -1)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim, p05, p10, p15))
+    %>% select(-c(hist_mean, hist_sd, sd_spei, p05, p10, p15))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
