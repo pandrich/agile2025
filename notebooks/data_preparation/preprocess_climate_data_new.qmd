@@ -194,7 +194,6 @@ df_utci_12m <- calculate_utci_12m_stats_monthly_ave(df_utci)
 )
 ```
 
-
 ### Population Weighted UTCI
 
 ```{r}

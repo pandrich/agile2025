@@ -1,0 +1,168 @@
+---
+title: "DHS Zambia Data Processing"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+library(tidyverse)
+library(sf)
+library(readxl)
+library(patchwork)
+library(paletteer)
+library(ggtext)
+library(scales)
+
+# Set random seed
+nb_name <- "Preprocess climate data for Zambia"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+
+# Folder structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+clim_data_dir <- root("data/processed/climate")
+dir.create(clim_data_dir, showWarnings = FALSE)
+```
+
+# Parameters
+
+```{r}
+coords <- list(
+  "MOZ" = c(30, 41.2, -26.9, -10.3),
+  "ZWE" = c(25.2, 33.1, -22.5, -15.45),
+  "LSO" = c(26.99, 29.46, -30.68, -28.55),
+  "NAM" = c(11.65, 25.27, -29, -16.9),
+  "ZMB" = c(21.95, 33.8, -18.1, -8.15),
+  "UGA" = c(29.55, 35.05, -1.49, 4.22),
+  "KEN" = c(33.90, 41.92, -4.68, 5.05)
+)
+```
+
+# Import Data
+
+## SPEI
+
+Data obtained using the Climate Data Store API
+
+```{r}
+rast_spei <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "climate/spei",
+    "spei01.nc"
+  )
+)
+```
+
+# Process Data
+
+## Zambia
+
+### SPEI
+
+#### Create dataset
+
+```{r}
+start_date <- "1960-01-01"
+rast_spei_times <- terra::time(rast_spei)
+ids <- which(rast_spei_times >= start_date)
+```
+
+```{r}
+thresholds <- round(quantile(seq_along(ids), probs = c(0, 0.25, 0.5, 0.75, 1)))
+dfs_spei <- list()
+for (i in seq_along(ids)) {
+  if (i %in% thresholds) {
+    thresh_idx <- which(thresholds == i)
+    print(paste0(names(thresh_idx), " complete"))
+  }
+  dfs_spei[[i]] <- (
+    rast_spei
+    %>% terra::subset(ids[[i]])
+    %>% terra::crop(terra::ext(coords[["ZMB"]]))
+    %>% as_tibble()
+    %>% mutate(
+      spei_tile_code = row_number(),
+      date = as.Date(rast_spei_times[[ids[[i]]]])
+    )
+    %>% rename(
+      spei = 1
+    )
+    %>% select(
+      spei_tile_code,
+      date,
+      spei
+    )
+  )
+}
+spei_grid_map_zmb <- (
+  rast_spei
+  %>% terra::subset(ids[[1]])
+  %>% terra::crop(terra::ext(coords[["ZMB"]]))
+  %>% terra::as.polygons(aggregate = FALSE)
+  %>% st_as_sf()
+  %>% mutate(
+    spei_tile_code = row_number()
+  )
+  %>% select(spei_tile_code)
+)
+df_spei_grid_zmb <- bind_rows(dfs_spei)
+```
+
+#### Save
+
+```{r}
+st_write(spei_grid_map_zmb, dsn = file.path(clim_data_dir, "spei_zmb_grid_map.geojson"))
+write_csv(df_spei_grid_zmb, file = file.path(clim_data_dir, "spei_zmb_by_tile.csv"))
+```
+
+### UTCI
+
+#### Create dataset
+
+```{r}
+rast_files <- list.files(file.path(raw_data_dir, "climate/utci/daily/ZMB"), pattern = "^ECMWF_utci_daily_stats", full.names = TRUE, recursive = TRUE)
+thresholds <- round(quantile(seq_along(rast_files), probs = c(0, 0.25, 0.5, 0.75, 1)))
+dfs_utci <- list()
+for (i in seq_along(rast_files)) {
+  if (i %in% thresholds) {
+    thresh_idx <- which(thresholds == i)
+    print(paste0(names(thresh_idx), " complete"))
+  }
+  rast_utci <- terra::rast(rast_files[[i]])["utci_daily_max"]
+  date <- terra::time(rast_utci)[[1]]
+  dfs_utci[[i]] <- (
+    rast_utci
+    %>% as_tibble()
+    %>% mutate(
+      utci_tile_code = row_number(),
+      date = as.Date(date, format = "%Y-%m-%d"),
+      utci_daily_max = utci_daily_max - 273.15
+    )
+    %>% select(
+      utci_tile_code,
+      date,
+      utci_daily_max
+    )
+  )
+}
+utci_grid_map_zmb <- (
+    terra::rast(rast_files[[1]])["utci_daily_max"]
+    %>% terra::as.polygons(aggregate = FALSE)
+    %>% st_as_sf()
+    %>% mutate(
+      utci_tile_code = row_number(),
+    )
+    %>% select(utci_tile_code)
+)
+df_utci_grid_zmb <- bind_rows(dfs_utci)
+```
+
+#### Save
+
+```{r}
+st_write(utci_grid_map_zmb, dsn = file.path(clim_data_dir, "utci_zmb_grid_map.geojson"))
+write_csv(df_utci_grid_zmb, file = file.path(clim_data_dir, "utci_zmb_by_tile.csv"))
+```

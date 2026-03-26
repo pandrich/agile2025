@@ -75,7 +75,7 @@ covars <- c(
   "country",
   "adm_name",
   "rural",
-  "over_18",
+  "age",
   "school_level",
   "live_with_male_relative",
   viol_var
@@ -84,15 +84,50 @@ vars <- c(covars, clim_var)
 
 bin_covs <- c(
   "rural",
-  "over_18",
   "live_with_male_relative" 
 )
 mono_covs <- c(
   "school_level"
 )
 cont_covs <- c(
+  "age",
   "clim"
 )
+
+vars_to_comp <- c(
+  # "b_a",
+  # "a_coa"
+  # "a_coa[1,1]",
+  # "a_coa[1,2]",
+  # "a_coa[1,3]",
+  # "a_coa[1,4]",
+  # "a_coa[1,5]",
+  # "a_coa[2,1]",
+  # "a_coa[2,2]",
+  # "a_coa[2,3]",
+  # "a_coa[2,4]",
+  # "a_coa[2,5]",
+  "a_coa[1]",
+  "a_coa[2]",
+  "a_coa[3]",
+  "a_coa[4]",
+  "a_coa[5]",
+  "b_sc",
+  "b_r",
+  "b_l",
+  "b_cl_mu",
+  "b_cl[1,1]",
+  "b_cl[1,2]",
+  "b_cl[1,3]",
+  "b_cl[1,4]",
+  "b_cl[1,5]",
+  "b_cl[2,1]",
+  "b_cl[2,2]",
+  "b_cl[2,3]",
+  "b_cl[2,4]",
+  "b_cl[2,5]"
+)
+  
 
 # Computation settings
 adapt_delta = 0.95
@@ -274,7 +309,6 @@ df_clim_viol <- (
       | (live_with_mother == 1) 
       | (live_with_partner == 1)
     ),
-    over_18 = as.numeric(age > 18)
   )
   %>% select(
     -c(
@@ -283,6 +317,100 @@ df_clim_viol <- (
       live_with_partner
     )
   )
+)
+```
+
+# Prepare Data
+
+## Restrict locations
+
+```{r}
+sf_vacs <- (
+  sf_all
+  %>% filter(
+    country %in% (df_clim_viol$country %>% unique()),
+    adm_name %in% (df_clim_viol$adm_name %>% unique())
+  )
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = standardize(st_coordinates(centroid)[,1]),
+    lat = standardize(st_coordinates(centroid)[,2])
+  )
+)
+```
+
+## Extract model subsets
+
+```{r}
+df_model <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+  )
+  %>% select(all_of(vars))
+  # %>% na.omit()
+  %>% filter(!is.na(sample_weight))
+  %>% mutate(
+    rel_age = as.integer(age - min(age))
+  )
+  %>% group_by(country, adm_name)
+  %>% summarise(
+    rural = sum(rural * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    age = sum(rel_age * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    school_level = sum(school_level * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    live_with_male_relative = sum(live_with_male_relative * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    sv = round(sum(sv * sample_weight, na.rm = TRUE)),
+    N_p = round(sum(sample_weight, na.rm = TRUE)),
+    dev_value_pop_weighted_temp_2m_max_above_1sd_12m = sum(dev_value_pop_weighted_temp_2m_max_above_1sd_12m * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% ungroup()
+  %>% merge(
+    sf_vacs %>% as.data.frame() %>% select(country, adm_name, lon, lat),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = factor(country),
+    adm_name = factor(adm_name),
+    clim := scale(!!sym(clim_var)),
+    x = standardize(lon),
+    y = standardize(lat)
+  )
+)
+```
+
+## Final data for stan models
+
+```{r}
+num_hsgp_bases <- 16
+indices <- matrix(data = NA, num_hsgp_bases^2, 2)
+mm = 0
+for (m1 in 1:num_hsgp_bases) {
+  for (m2 in 1:num_hsgp_bases) {
+    mm = mm + 1
+    indices[mm,] = c(m1, m2)
+  }
+}
+
+data_list <- list(
+  N = nrow(df_model),
+  N_c = length(unique(df_model$country)),
+  N_adm = length(unique(df_model$adm_name)),
+  N_p = df_model$N_p,
+  co = as.numeric(df_model$country),
+  adm = as.numeric(df_model$adm_name),
+  R = df_model$rural,
+  A = df_model$age,
+  sc = df_model$school_level, 
+  rel = df_model$live_with_male_relative, 
+  cl = as.numeric(df_model$clim),
+  sv = df_model$sv,
+  M = num_hsgp_bases,
+  M_nD = num_hsgp_bases^2,
+  L = c(5/2*max(df_model$x), 5/2*max(df_model$y)),
+  indices = indices,
+  X = cbind(df_model$x, df_model$y)
 )
 ```
 
@@ -418,323 +546,25 @@ df_clim_viol <- (
 )
 ```
 
-```{r}
-df_clim_viol_summ <- (
-  df_clim_viol
-  %>% group_by(country, adm_name)
-  %>% summarise(
-    clim = mean(!!sym(clim_var), na.rm = TRUE),
-    rural = sum(rural * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
-    live_with_male_relative = sum(live_with_male_relative * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
-    over_18 = sum(over_18 * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
-    school_level = sum(school_level * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
-    sv = sum(sv * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
-    .groups = "drop"
-  )
-  %>% merge(
-    sf_all,
-    by = c("country", "adm_name"),
-    all.x = TRUE
-  )
-  %>% st_as_sf()
-)
-```
-
-```{r}
-#| fig-width: 14
-#| fig-height: 6
-p1 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = clim),
-    color = "transparent"
-  )
-  + scale_fill_viridis_c(
-    option = "magma"
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "Excess heat days"
-  )
-)
-
-p2 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = over_18),
-    color = "transparent"
-  )
-  + scale_fill_distiller(
-    palette = "Greys",
-    labels = scales::label_percent(accuracy = 1)
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "Over 18"
-  )
-)
-
-p3 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = rural),
-    color = "transparent"
-  )
-  + scale_fill_paletteer_c(
-    palette = "ggthemes::Orange-Blue Diverging",
-    labels = scales::label_percent(accuracy = 1),
-    direction = -1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "Rural level"
-  )
-)
-
-p4 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = live_with_male_relative),
-    color = "transparent"
-  )
-  + scale_fill_distiller(
-    palette = "Blues",
-    direction = -1,
-    labels = scales::label_percent(accuracy = 1)
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "Live with male relative"
-  )
-)
-
-p5 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = school_level),
-    color = "transparent"
-  )
-  + scale_fill_distiller(
-    palette = "Greens",
-    direction = -1
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "School Attainment"
-  )
-)
-
-p6 <- (
-  ggplot(data = df_clim_viol_summ)
-  + geom_sf(
-    mapping = aes(fill = sv),
-    color = "transparent"
-  )
-  + scale_fill_viridis_c(
-    option = "viridis",
-    labels = scales::label_percent(accuracy = 1)
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    plot.background = element_blank(),
-    axis.ticks = element_blank(),
-    axis.text = element_blank(),
-    legend.background = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.title = element_text(size = 14)
-  )
-  + labs(
-    fill = "Mean SV"
-  )
-)
-
-# layout <- "
-#   ABE
-#   CDE
-# "
-layout <- "
-  ABC
-  DEF
-"
-
-(
-  p3 + p2 + p5 + p4 + p1 + p6
-  + plot_layout(
-    # widths = c(1, 1, 1.5),
-    design = layout
-  )
-)
-  
-ggsave(
-  path = fig_dir,
-  filename = paste0("variable_comparison_", clim_label, "_", pop_label, "_", viol_label, ".png")
-)
-```
-
-# Prepare Data
-
-## Restrict locations
-
-```{r}
-sf_vacs <- (
-  sf_all
-  %>% filter(
-    country %in% (df_clim_viol$country %>% unique()),
-    adm_name %in% (df_clim_viol$adm_name %>% unique())
-  )
-  %>% mutate(
-    centroid = st_centroid(geometry),
-    lon = standardize(st_coordinates(centroid)[,1]),
-    lat = standardize(st_coordinates(centroid)[,2])
-  )
-)
-```
-
-## Extract model subsets
-
-```{r}
-df_model <- (
-  df_clim_viol
-  %>% filter(
-    female == 1,
-  )
-  %>% select(all_of(vars))
-  %>% na.omit()
-  %>% merge(
-    sf_vacs %>% as.data.frame() %>% select(country, adm_name, lon, lat),
-    by = c("country", "adm_name"),
-    all.x = TRUE
-  )
-  %>% mutate(
-    country = factor(country),
-    adm_name = factor(adm_name),
-    school_level = factor(
-      school_level, 
-      levels = sort(unique(school_level)),
-      ordered = TRUE
-    ),
-    clim := scale(!!sym(clim_var)),
-    x = standardize(lon),
-    y = standardize(lat)
-  )
-  %>% group_by(country)
-  %>% mutate(
-    clim_between = mean(!!sym(clim_var), na.rm = TRUE)
-  )
-  %>% ungroup()
-  %>% mutate(
-    clim_within = scale(!!sym(clim_var) - clim_between),
-    clim_between = scale(clim_between)
-  )
-  # %>% group_by(adm_name)
-  # %>% sample_frac(0.2)
-  # %>% ungroup()
-)
-```
-
-
-## Final data for stan models
-
-```{r}
-num_hsgp_bases <- 16
-indices <- matrix(data = NA, num_hsgp_bases^2, 2)
-mm = 0
-for (m1 in 1:num_hsgp_bases) {
-  for (m2 in 1:num_hsgp_bases) {
-    mm = mm + 1
-    indices[mm,] = c(m1, m2)
-  }
-}
-
-data_list <- list(
-  N = nrow(df_model),
-  N_c = length(unique(df_model$country)),
-  N_adm = length(unique(df_model$adm_name)),
-  N_sc = length(unique(df_model$school_level)),
-  W = df_model$sample_weight,
-  co = as.numeric(df_model$country),
-  adm = as.numeric(df_model$adm_name),
-  R = df_model$rural,
-  A = df_model$over_18,
-  sc = as.numeric(df_model$school_level), 
-  rel = df_model$live_with_male_relative, 
-  cl = as.numeric(df_model$clim),
-  sv = df_model$sv,
-  M = num_hsgp_bases,
-  M_nD = num_hsgp_bases^2,
-  L = c(5/2*max(df_model$x), 5/2*max(df_model$y)),
-  indices = indices,
-  X = cbind(df_model$x, df_model$y)
-)
-```
-
 # Modeling
 
-
-
-## Fixed effects: country * climate * age
+## Fixed effects: country \* climate \* age
 
 ```{r}
 pars_fixed_country_age <- c(
-  "b_cosv",
-  "b_rsv",
-  "b_lsv",
-  "b_asv",
-  "b_scsv",
-  "b_clsv_mu",
-  "b_clsv"
+  "a_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl"
 )
 ```
 
 ```{r}
 m_fixed_country_age <- rstan::stan(
-  file = file.path(mod_dir, "fixed_effects_country_age.stan"),
+  file = file.path(mod_dir, "fixed_effects_country_age_agg.stan"),
   data = data_list,
   model_name = "m_fixed_country_age",
   seed = seed,
@@ -754,15 +584,14 @@ ebfmi_per_chain <- sapply(sp, function(chain_mat) {
 print(ebfmi_per_chain)
 ```
 
-
 ```{r}
 #| fig-width: 12
 #| fig-height: 12
 bayesplot::mcmc_pairs(
   as.array(m_fixed_country_age), 
   pars = c(
-    "b_cosv[2]",
-    "b_clsv[1,2]"
+    "a_co[2]",
+    "b_cl[2]"
   ),
   np = nuts_params(m_fixed_country_age),
   np_style = pairs_style_np(
@@ -772,7 +601,6 @@ bayesplot::mcmc_pairs(
   )
 )
 ```
-
 
 ### Summary
 
@@ -784,22 +612,47 @@ print(
 )
 ```
 
+### Variable analysis
+
+```{r}
+(
+  m_fixed_country_age
+  %>% as_draws_df()
+  %>% select(all_of(vars_to_comp))
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    variable = factor(variable, levels = vars_to_comp)
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    mean = mean(value, na.rm = TRUE),
+    pl0 = mean(value < 0, na.rm = TRUE),
+    pg0 = mean(value > 0, na.rm = TRUE)
+  )
+)
+```
+
 ## Random intercept and slope by country
 
 ```{r}
 pars_ranef_country_age <- c(
   "a",
-  "b_cosv",
-  "b_rsv",
-  "b_lsv",
-  "b_asv",
-  "b_scsv",
-  "b_clsv_mu",
-  "b_clsv_sd",
-  "b_clsv"
+  # "a_coa_mu",
+  # "a_coa_sd",
+  "a_coa",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl"
 )
 ```
-
 
 ```{r}
 m_ranef_country_age <- rstan::stan(
@@ -823,15 +676,16 @@ ebfmi_per_chain <- sapply(sp, function(chain_mat) {
 print(ebfmi_per_chain)
 ```
 
-
 ```{r}
 #| fig-width: 12
 #| fig-height: 12
 bayesplot::mcmc_pairs(
   as.array(m_ranef_country_age), 
   pars = c(
-    "b_cosv[2]",
-    "b_clsv[1,2]"
+    # "b_cosv[2]",
+    "a_coa[1]",
+    # "a_coa[1,2]",
+    "b_cl[1,2]"
   ),
   np = nuts_params(m_ranef_country_age),
   np_style = pairs_style_np(
@@ -852,21 +706,111 @@ print(
 )
 ```
 
+### Variable analysis
 
+```{r}
+(
+  m_ranef_country_age
+  %>% as_draws_df()
+  %>% select(all_of(vars_to_comp))
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    variable = factor(variable, levels = vars_to_comp)
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    mean = mean(value, na.rm = TRUE),
+    pl0 = mean(value < 0, na.rm = TRUE),
+    pg0 = mean(value > 0, na.rm = TRUE)
+  )
+)
+```
 
+## Random intercept and slope by country, correlated intercepts and slopes
+
+```{r}
+pars_ranef_country_age_corr <- c(
+  "a",
+  "b_coa",
+  "b_coa_sd",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho[1]",
+  "rho[2]"
+)
+```
+
+```{r}
+m_ranef_country_age_corr <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_country_age_corr.stan"),
+  data = data_list,
+  model_name = "m_ranef_country_age_corr",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_country_age_corr, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_country_age_corr), 
+  pars = c(
+    "b_coa[1,2]",
+    "b_cl[1,2]"
+  ),
+  np = nuts_params(m_ranef_country_age_corr),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_country_age_corr, 
+  pars = pars_ranef_country_age_corr,
+  probs = c(0.025, 0.95)
+)
+```
 
 ## Random effects + HSGP
 
 ```{r}
 pars_ranef_gp <- c(
-  "b_cosv",
-  "b_rsv",
-  "b_lsv",
-  "b_asv",
-  "b_scsv",
-  "b_clsv_mu",
-  "b_clsv_sd",
-  "b_clsv",
+  "b_co",
+  "b_r",
+  "b_l",
+  "b_a",
+  "b_sc",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
   "delta",
   "sigma"
 )
@@ -882,9 +826,6 @@ m_ranef_gp <- rstan::stan(
   refresh = 1000
 )
 ```
-
-
-
 
 ### Model Checks
 
@@ -903,8 +844,8 @@ print(ebfmi_per_chain)
 bayesplot::mcmc_pairs(
   as.array(m_ranef_gp), 
   pars = c(
-    "b_cosv[2]",
-    "b_clsv[1,2]"
+    "b_co[2]",
+    "b_cl[1,2]"
   ),
   np = nuts_params(m_ranef_gp),
   np_style = pairs_style_np(
@@ -921,6 +862,140 @@ bayesplot::mcmc_pairs(
 print(
   m_ranef_gp, 
   pars = pars_ranef_gp,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Total climate effect
+
+```{r}
+pars_ranef_tot_eff <- c(
+  "a",
+  "b_co_mu",
+  "b_co_sd",
+  "b_co",
+  "b_r",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho"
+)
+```
+
+```{r}
+m_ranef_tot_eff <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_total_effect.stan"),
+  data = data_list,
+  model_name = "m_ranef_tot_eff",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_tot_eff, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_tot_eff), 
+  pars = c(
+    "b_co[1]",
+    "b_cl[1]"
+  ),
+  np = nuts_params(m_ranef_tot_eff),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_tot_eff, 
+  pars = pars_ranef_tot_eff,
+  probs = c(0.025, 0.95)
+)
+```
+
+## Total climate effect, with adm random effects
+
+```{r}
+pars_ranef_tot_eff_adm <- c(
+  "a",
+  "b_co_mu",
+  "b_co_sd",
+  "b_co",
+  "b_adm_mu",
+  "b_adm_sd",
+  "b_r",
+  "b_cl_mu",
+  "b_cl_sd",
+  "b_cl",
+  "rho"
+)
+```
+
+```{r}
+m_ranef_tot_eff_adm <- rstan::stan(
+  file = file.path(mod_dir, "random_effects_total_effect_adm.stan"),
+  data = data_list,
+  model_name = "m_ranef_tot_eff_adm",
+  seed = seed,
+  # control = list(adapt_delta = adapt_delta),
+  refresh = 1000
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(m_ranef_tot_eff_adm, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(m_ranef_tot_eff_adm), 
+  pars = c(
+    "b_co[1]",
+    "b_cl[1]"
+  ),
+  np = nuts_params(m_ranef_tot_eff_adm),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+### Summary
+
+```{r}
+print(
+  m_ranef_tot_eff_adm, 
+  pars = pars_ranef_tot_eff_adm,
   probs = c(0.025, 0.95)
 )
 ```
