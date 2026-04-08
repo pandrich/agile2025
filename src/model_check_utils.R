@@ -202,13 +202,13 @@ create_df_marginal_bin_differences_stats_by_group <- function(marg_diff, cred1 =
   )
 }
 
-calculate_marginal <- function(fit, data, cov, grid_vals) {
+calculate_marginal <- function(fit, data, cov, grid_vals, ndraws = 1000) {
 
   draws_list <- vector("list", length(grid_vals))
   for (i in seq_along(grid_vals)) {
     newdata <- data
     newdata[[cov]] <- grid_vals[i]
-    ep <- posterior_epred(fit, newdata = newdata, re_formula = NA)
+    ep <- posterior_epred(fit, newdata = newdata, re_formula = NA, ndraws=ndraws)
     draws_list[[i]] <- rowMeans(ep)
   }
   
@@ -229,6 +229,7 @@ calculate_marginal_by_group <- function(
     data, 
     cov, 
     grid_vals,
+    ndraws = 1000,
     group = "country"
   ) {
   
@@ -241,7 +242,7 @@ calculate_marginal_by_group <- function(
     newdata <- data
     newdata[[cov]] <- grid_vals[i]
     group_indices <- split(seq_len(nrow(newdata)), group_vec)
-    ep <- posterior_epred(fit, newdata = newdata, re_formula = NULL)
+    ep <- posterior_epred(fit, newdata = newdata, re_formula = NULL, ndraws = ndraws)
     draws_list[[i]] <- sapply(
       group_indices,
       function(country_idxs) {
@@ -314,11 +315,11 @@ summarize_draws_by_group <- function(draws_list, cred1 = 0.5, cred2 = 0.95) {
   bind_rows(df_list_grid)
 }
 
-generate_mono_marginal_df <- function(fit, data, covs) {
+generate_mono_marginal_df <- function(fit, data, covs, ndraws = 1000) {
   results <- list()
   for (cov in covs) {
     grid_vals <- sort(as.integer(as.character(unique(data[[cov]]))))
-    mg <- calculate_marginal(fit, data, cov, grid_vals)
+    mg <- calculate_marginal(fit, data, cov, grid_vals, ndraws = ndraws)
     s <- (
       summarize_draws(mg)
       %>% mutate(
@@ -346,12 +347,12 @@ generate_mono_marginal_by_group_df <- function(fit, data, covs, group = "country
   bind_rows(results) 
 }
 
-generate_cont_marginal_df <- function(fit, data, covs, grid_points = 20) {
+generate_cont_marginal_df <- function(fit, data, covs, grid_points = 20, ndraws = 1000) {
   results <- list()
   for (cov in covs) {
     rng <- range(data[[cov]], na.rm = TRUE)
     grid_vals <- seq(rng[1], rng[2], length.out = grid_points)
-    mg <- calculate_marginal(fit, data, cov, grid_vals)
+    mg <- calculate_marginal(fit, data, cov, grid_vals, ndraws = ndraws)
     s <- (
       summarize_draws(mg)
       %>% mutate(
@@ -363,10 +364,10 @@ generate_cont_marginal_df <- function(fit, data, covs, grid_points = 20) {
   bind_rows(results) 
 }
 
-generate_single_cont_marginal_by_group_df <- function(fit, data, cov, grid_points = 20, group = "country") {
+generate_single_cont_marginal_by_group_df <- function(fit, data, cov, grid_points = 20, ndraws = 1000, group = "country") {
   rng <- range(data[[cov]], na.rm = TRUE)
   grid_vals <- seq(rng[1], rng[2], length.out = grid_points)
-  mg <- calculate_marginal_by_group(fit, data, cov, grid_vals, group = group)
+  mg <- calculate_marginal_by_group(fit, data, cov, grid_vals, ndraws = ndraws, group = group)
   s <- (
     summarize_draws_by_group(mg)
     %>% mutate(

@@ -41,7 +41,7 @@ The dataset contains entries for each day (note that the SPEI data occurs only o
 ```{r}
 df_clim <- (
   read_csv(
-    file.path(proc_data_dir, "processed_utci_temp_spei_daily_admin2.csv"),
+    file.path(proc_data_dir, "climate/combined", "processed_utci_temp_spei_daily_admin2.csv"),
     show_col_types = FALSE
   )
   %>% group_by(
@@ -96,15 +96,6 @@ unique(
   %>% pull(adm2_code)
 )
 ```
-
-```{r}
-unique(
-  df_viol_zmb
-  %>% filter(country == "Zambia")
-  %>% pull(adm2_code)
-)
-```
-
 
 ## Violence
 
@@ -205,7 +196,7 @@ df_clim_viol <- bind_rows(df_clim_viol_zwe, df_clim_viol_zmb)
 ```{r}
 (
   df_clim_viol
-  %>% filter(is.na(value_utci_max_above_1sd_12m))
+  %>% filter(is.na(value_utci_above_1sd_12m))
 )
 ```
 
@@ -215,7 +206,7 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
   ggplot(
     data = df_clim_viol, 
     aes(
-      x = dev_value_utci_max_above_32_12m,
+      x = dev_value_utci_above_32_12m,
       fill = country
     )
   )

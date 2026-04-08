@@ -59,7 +59,7 @@ label_map <- c(
 
 # Var settings
 countries <- c("Lesotho", "Mozambique", "Namibia", "Zambia", "Zimbabwe")
-clim_var <- "dev_value_pop_weighted_temp_2m_max_above_1sd_12m"
+clim_var <- "dev_value_sd_mean_max_temp_12m"
 clim_label <- "temp_max_above_1sd"
 viol_var <- "sv"
 viol_label <- "all_viol"
@@ -218,195 +218,29 @@ sf_all <- (
 )
 ```
 
-## Climate
-
-```{r}
-df_clim <- (
-  read_csv(
-    file.path(
-      model_data_dir,
-      "climate_food_prices.csv"
-    ),
-    show_col_type = FALSE
-  )
-  %>% filter(
-    country %in% countries
-  )
-)
-```
-
 ## Climate & Violence
 
 ```{r}
 df_clim_viol <- (
-  read_csv(
+  readRDS(
     file.path(
       model_data_dir,
-      "climate_food_prices_violence.csv"
-    ),
-    show_col_type = FALSE
+      "merged_df_south_girls_heat.rds"
+    )
   )
   %>% filter(
-    !is.na(sample_weight),
     country %in% countries
   )
-  %>% group_by(country)
   %>% mutate(
-    country_sample_weight = sum(sample_weight, na.rm = TRUE)
-  )
-  %>% ungroup()
-  %>% mutate(
-    sample_weight = (
-      1E-3 
-      * sample_weight 
-      * (
-        sum(sample_weight, na.rm = TRUE) 
-        / (length(unique(country)) * country_sample_weight)
-      )
-    ),
-    over_18 = as.numeric(age > 18)
-  )
+    over_18 = AgeGroup - 1,
 )
 ```
 
 # Viz
 
 ```{r}
-#| fig-width: 6
-#| fig-height: 7
-(
-  ggplot()
-  + geom_histogram(
-    data = df_clim,
-    mapping = aes(
-      y = after_stat(ncount),
-      x = !!sym(clim_var),
-      fill = "clim"
-    ),
-    alpha = 0.7,
-    binwidth = 5
-  )
-  + geom_histogram(
-    data = df_clim_viol,
-    mapping = aes(
-      y = after_stat(ncount),
-      x = !!sym(clim_var),
-      fill = "clim_viol"
-    ),
-    alpha = 0.6,
-    binwidth = 5
-  )
-  + geom_vline(
-    xintercept = 0,
-    color = "black",
-    linetype = "dashed"
-  )
-  + facet_wrap(
-    ~ country,
-    ncol = 1
-  )
-  + scale_fill_manual(
-    values = c(
-      "clim" = col_palette[2],
-      "clim_viol" = col_palette[5]
-    ),
-    labels = c(
-      "clim" = "Climate variable distribution",
-      "clim_viol" = "Climate at survey"
-    )
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
-    plot.background = element_blank(),
-    axis.title = element_text(size = 15),
-    axis.text = element_text(size = 13),
-    strip.background = element_blank(),
-    strip.text = element_text(size = 13),
-    legend.background = element_blank(),
-    legend.title = element_blank(),
-    legend.text = element_text(size = 13),
-  )
-  + labs(
-    y = "Counts (norm.)",
-    x = "Excess hot days"
-  )
-)
-```
-
-```{r}
-#| fig-width: 8
-#| fig-height: 6
-(
-  ggplot()
-  + geom_histogram(
-    data = df_clim %>% filter(country == "Namibia"),
-    mapping = aes(
-      y = after_stat(ncount),
-      x = !!sym(clim_var),
-      fill = "clim"
-    ),
-    alpha = 0.7,
-    binwidth = 5
-  )
-  + geom_histogram(
-    data = df_clim_viol %>% filter(country == "Namibia"),
-    mapping = aes(
-      y = after_stat(ncount),
-      x = !!sym(clim_var),
-      fill = "clim_viol"
-    ),
-    alpha = 0.6,
-    binwidth = 5
-  )
-  + geom_vline(
-    xintercept = 0,
-    color = "black",
-    linetype = "dashed"
-  )
-  + facet_wrap(
-    ~ adm_name,
-    ncol = 4
-  )
-  + scale_fill_manual(
-    values = c(
-      "clim" = col_palette[2],
-      "clim_viol" = col_palette[5]
-    ),
-    labels = c(
-      "clim" = "Climate variable distribution",
-      "clim_viol" = "Climate at survey"
-    )
-  )
-  + theme(
-    panel.background = element_blank(),
-    panel.grid = element_blank(),
-    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
-    plot.background = element_blank(),
-    axis.title = element_text(size = 15),
-    axis.text = element_text(size = 13),
-    strip.background = element_blank(),
-    strip.text = element_text(size = 13),
-    legend.background = element_blank(),
-    legend.title = element_blank(),
-    legend.text = element_text(size = 13),
-    legend.position = "inside",
-    legend.position.inside = c(0.5, 0.1)
-  )
-  + labs(
-    y = "Counts (norm.)",
-    x = "Excess hot days"
-  )
-)
-```
-
-```{r}
 df_clim_viol_adm <- (
   df_clim_viol
-  %>% filter(
-    female == 1
-  )
   %>% group_by(country, adm_name)
   %>% summarise(
     clim = mean(!!sym(clim_var), na.rm = TRUE),
@@ -680,7 +514,6 @@ df_model_adm <- (
 )
   
 ```
-
 
 ## Generate adjacency matrix
 
@@ -1199,7 +1032,6 @@ ggsave(
 )
 ```
 
-
 ### Random Intercepts by admin level and cluster
 
 ```{r}
@@ -1218,7 +1050,6 @@ pars_ranint_adm_clu <- c(
   "b_clim"
 )
 ```
-
 
 ```{r}
 stanvars <- stanvar(5, "num_pred")
@@ -1381,9 +1212,6 @@ ggsave(
 )
 ```
 
-
-
-
 ### Random Intercepts by admin level and cluster + Fixed interaction: country \* climate
 
 ```{r}
@@ -1406,7 +1234,6 @@ pars_fix_int_cc <- c(
   "b_countryZimbabwe:clim"
 )
 ```
-
 
 ```{r}
 stanvars <- stanvar(5, "num_pred")
