@@ -94,11 +94,29 @@ build_weighted_spei_country <- function(
 }
 
 
-calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
+calculate_utci_12m_stats <- function(df_utci_daily, roll = FALSE, roll_days = 3, weights = "") {
   if (weights != "") {
-    variable_name = paste0(weights, "_", "utci_max")
+    variable_name = paste0(weights, "_", "utci")
   } else {
-    variable_name = "utci_max"
+    variable_name = "utci"
+  }
+  if (roll) {
+    df_utci_daily <- (
+      df_utci_daily
+      %>% arrange(country, adm_code, adm_name, date)
+      %>% group_by(country, adm_code, adm_name)
+      %>% mutate(
+        utci_max = slider::slide_index_dbl(
+          .x = utci_max,
+          .i = date,
+          .f = ~ mean(.x, na.rm = TRUE),
+          .before = ~ .x %m-% days(roll_days),
+          .complete = TRUE
+        )
+      )
+      %>% ungroup()
+    )
+    variable_name = paste0(variable_name, "_roll")
   }
   df_utci_12m <- (
     df_utci_daily
@@ -106,20 +124,20 @@ calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
     %>% mutate(
       hist_mean = mean(utci_max, na.rm = TRUE),
       hist_sd = sd(utci_max, na.rm = TRUE),
-      p85 = quantile(utci_max, 0.85, na.rm = TRUE),
-      p90 = quantile(utci_max, 0.9, na.rm = TRUE),
-      p95 = quantile(utci_max, 0.95, na.rm = TRUE)
+      hist_p85 = quantile(utci_max, 0.85, na.rm = TRUE),
+      hist_p90 = quantile(utci_max, 0.9, na.rm = TRUE),
+      hist_p95 = quantile(utci_max, 0.95, na.rm = TRUE)
     )
     %>% ungroup()
     %>% mutate(
       sd_clim = (utci_max - hist_mean) / hist_sd,
       above_1sd = as.numeric(sd_clim > 1),
-      above_p85 = as.numeric(utci_max > p85),
-      above_p90 = as.numeric(utci_max > p90),
-      above_p95 = as.numeric(utci_max > p95),
+      above_p85 = as.numeric(utci_max > hist_p85),
+      above_p90 = as.numeric(utci_max > hist_p90),
+      above_p95 = as.numeric(utci_max > hist_p95),
       above_32 = as.numeric(utci_max > 32)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_clim, p85, p90, p95))
+    %>% select(-c(hist_mean, hist_sd, sd_clim, hist_p85, hist_p90, hist_p95))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
@@ -136,6 +154,20 @@ calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
         ),
         .names = "{.col}_12m"
       ),
+      mean_12m = slider::slide_index_dbl(
+        .x = utci_max,
+        .i = date,
+        .f = ~ mean(.x, na.rm = TRUE),
+        .before = ~ .x %m-% months(12),
+        .complete = TRUE
+      ),
+      max_12m = slider::slide_index_dbl(
+        .x = utci_max,
+        .i = date,
+        .f = ~ max(.x, na.rm = TRUE),
+        .before = ~ .x %m-% months(12),
+        .complete = TRUE
+      )
     )
     %>% ungroup()
     %>% select(country, adm_code, adm_name, date, contains("12m"))
@@ -152,7 +184,11 @@ calculate_utci_12m_stats <- function(df_utci_daily, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      dev_value = (value - mean_value),
+      dev_value = if_else(
+        sd_value == 0,
+        0,
+        (value - mean_value) / sd_value
+      ),
       variable = paste0(variable_name, "_", variable)
     )
     %>% filter(!is.na(value))
@@ -237,11 +273,29 @@ calculate_utci_12m_stats_monthly_ave <- function(df_utci_daily, weights = "") {
 }
 
 
-calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
+calculate_temp_12m_stats <- function(df_temp_daily, roll = FALSE, roll_days = 3, weights = "") {
   if (weights != "") {
-    variable_name = paste0(weights, "_", "temp_2m_max")
+    variable_name = paste0(weights, "_temp")
   } else {
-    variable_name = "temp_2m_max"
+    variable_name = "temp"
+  }
+  if (roll) {
+    df_temp_daily <- (
+      df_temp_daily
+      %>% arrange(country, adm_code, adm_name, date)
+      %>% group_by(country, adm_code, adm_name)
+      %>% mutate(
+        temp_2m_max = slider::slide_index_dbl(
+          .x = temp_2m_max,
+          .i = date,
+          .f = ~ mean(.x, na.rm = TRUE),
+          .before = ~ .x %m-% days(roll_days),
+          .complete = TRUE
+        )
+      )
+      %>% ungroup()
+    )
+    variable_name = paste0(variable_name, "_roll")
   }
   df_temp_12m <- (
     df_temp_daily
@@ -249,20 +303,20 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
     %>% mutate(
       hist_mean = mean(temp_2m_max, na.rm = TRUE),
       hist_sd = sd(temp_2m_max, na.rm = TRUE),
-      p85 = quantile(temp_2m_max, 0.85, na.rm = TRUE),
-      p90 = quantile(temp_2m_max, 0.9, na.rm = TRUE),
-      p95 = quantile(temp_2m_max, 0.95, na.rm = TRUE)
+      hist_p85 = quantile(temp_2m_max, 0.85, na.rm = TRUE),
+      hist_p90 = quantile(temp_2m_max, 0.9, na.rm = TRUE),
+      hist_p95 = quantile(temp_2m_max, 0.95, na.rm = TRUE)
     )
     %>% ungroup()
     %>% mutate(
       sd_temp = (temp_2m_max - hist_mean) / hist_sd,
       above_1sd = as.numeric(sd_temp > 1),
-      above_p85 = as.numeric(temp_2m_max > p85),
-      above_p90 = as.numeric(temp_2m_max > p90),
-      above_p95 = as.numeric(temp_2m_max > p95),
+      above_p85 = as.numeric(temp_2m_max > hist_p85),
+      above_p90 = as.numeric(temp_2m_max > hist_p90),
+      above_p95 = as.numeric(temp_2m_max > hist_p95),
       above_32 = as.numeric(temp_2m_max > 32)
     )
-    %>% select(-c(hist_mean, hist_sd, sd_temp, p85, p90, p95))
+    %>% select(-c(hist_mean, hist_sd, sd_temp, hist_p85, hist_p90, hist_p95))
     %>% arrange(country, adm_code, adm_name, date)
     %>% group_by(country, adm_code, adm_name)
     %>% mutate(
@@ -279,10 +333,17 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
         ),
         .names = "{.col}_12m"
       ),
-      mean_temp_2m_max_12m = slider::slide_index_dbl(
+      mean_12m = slider::slide_index_dbl(
         .x = temp_2m_max,
         .i = date,
         .f = ~ mean(.x, na.rm = TRUE),
+        .before = ~ .x %m-% months(12),
+        .complete = TRUE
+      ),
+      max_12m = slider::slide_index_dbl(
+        .x = temp_2m_max,
+        .i = date,
+        .f = ~ max(.x, na.rm = TRUE),
         .before = ~ .x %m-% months(12),
         .complete = TRUE
       )
@@ -302,7 +363,11 @@ calculate_temp_12m_stats <- function(df_temp_daily, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      dev_value = value - mean_value,
+      dev_value = if_else(
+        sd_value == 0,
+        0,
+        (value - mean_value) / sd_value
+      ),
       variable = paste0(variable_name, "_", variable)
     )
     %>% filter(!is.na(value))

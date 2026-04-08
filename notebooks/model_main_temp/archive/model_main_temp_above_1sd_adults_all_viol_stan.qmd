@@ -18,6 +18,7 @@ library(posterior)
 library(ggdist)
 library(bayesplot)
 library(tidybayes)
+library(rstan)
 # theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
 library(patchwork)
 library(paletteer)
@@ -148,14 +149,14 @@ dashboard <- function( fit , warmup=FALSE , plot=TRUE , trank=TRUE ) {
         Rhat_vals <- as.numeric( round( y[,'Rhat4'], 2 ) )
         plot( y[,'n_eff'] , (Rhat_vals) , xlab="number of effective samples" , ylab="Rhat" , ylim=c( 1 , max(1.1,(Rhat_vals),na.rm=TRUE) ) , log='y' )
         abline( v=0.1*n_samples , lty=1 , col="red" )
-        abline( v=n_samples , lty=1 , col=gray() )
+        abline( v=n_samples , lty=1 , col=rethinking::grau() )
         abline( h=1 , lty=2 )
 
         # energy plot
-        dens( energy , adj=0.1 , xlab="HMC energy" )
+        rethinking::dens( energy , adj=0.1 , xlab="HMC energy" )
         mu <- mean(energy)
         sig <- sd(energy)
-        curve( dnorm( x , mu , sig ) , add=TRUE , col=rangi2 , lwd=1.5 )
+        curve( dnorm( x , mu , sig ) , add=TRUE , col="#0292b7", lwd=1.5 )
 
         # count of divergent iters
         plot( NULL , bty="n" , xlab=" " , ylab="" , xlim=c(0,1) , ylim=c(0,1) , xaxt="n" , yaxt="n" )
@@ -1151,6 +1152,16 @@ bayesplot::mcmc_pairs(
 ### Summary
 
 ```{r}
+(
+  subset_draws(
+    as_draws_array(m_ranef_country_age_corr),
+    variable = pars_ranef_country_age_corr
+  )
+  %>% summarise_draws()
+)
+```
+
+```{r}
 print(
   m_ranef_country_age_corr, 
   pars = pars_ranef_country_age_corr,
@@ -1161,7 +1172,6 @@ print(
 ```{r}
 dashboard(m_ranef_country_age_corr)
 ```
-
 
 ## Random effects + HSGP
 

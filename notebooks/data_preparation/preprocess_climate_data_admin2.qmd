@@ -16,7 +16,9 @@ library(paletteer)
 # Folder Structure
 root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
 raw_data_dir <- root("data/raw")
-proc_data_dir <- root("data/processed")
+proc_data_dir <- root("data/processed/climate")
+out_data_dir <- file.path(proc_data_dir, "combined")
+dir.create(out_data_dir, showWarnings = FALSE)
 fig_dir <- root("figures")
 dir.create(fig_dir, showWarnings = FALSE)
 mod_dir <- root("models")
@@ -45,7 +47,7 @@ There are 10 UTCI thermal stress categories that correspond to specific human ph
 ```{r}
 df_utci <- (
   read_csv(
-    file.path(proc_data_dir, "UTCI", "utci_max_daily_all_countries_admin2.csv"),
+    file.path(proc_data_dir, "utci", "utci_max_daily_all_countries_admin2.csv"),
     show_col_types = FALSE
   )
 )
@@ -56,7 +58,7 @@ df_utci <- (
 ```{r}
 df_utci_pop_weighted <- (
   read_csv(
-    file.path(proc_data_dir, "UTCI", "weighted_utci_max_daily_all_countries_admin2.csv"),
+    file.path(proc_data_dir, "utci", "weighted_utci_max_daily_all_countries_admin2.csv"),
     show_col_types = FALSE
   )
 )
@@ -69,7 +71,7 @@ df_utci_girl_weighted <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "UTCI",
+      "utci",
       "age_weighted_utci_max_daily_all_countries_admin2.csv"
     ),
     show_col_types = FALSE
@@ -113,6 +115,54 @@ df_temp_girl_weighted <- (
     ),
     show_col_types = FALSE
   )
+)
+```
+
+## SPEI
+
+### Raw SPEI
+
+```{r}
+df_spei <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "spei",
+      "spei_monthly_all_countries_admin2.csv"
+    ),
+    show_col_types = FALSE
+  )
+)
+```
+
+### Population weighted SPEI
+
+```{r}
+df_spei_pop_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "spei",
+      "weighted_spei_monthly_all_countries_admin2.csv"
+    ),
+    show_col_types = FALSE
+  )
+)
+```
+
+### Girl population weighted UTCI
+
+```{r}
+df_spei_girl_weighted <- (
+  read_csv(
+    file.path(
+      proc_data_dir,
+      "spei",
+      "age_weighted_spei_all_countries.csv"
+    ),
+    show_col_types = FALSE
+  )
+  %>% select(-popf_10_19)
 )
 ```
 
@@ -166,6 +216,25 @@ colSums(is.na(df_temp_pop_weighted_12m))
 df_temp_girl_weighted_12m <- calculate_temp_12m_stats(df_temp_pop_weighted, weights = "girl_weighted")
 ```
 
+## SPEI
+
+### Raw SPEI
+
+```{r}
+df_spei_12m <- calculate_spei_12m_stats(df_spei)
+```
+
+### Population Weighted UTCI
+
+```{r}
+df_spei_pop_weighted_12m <- calculate_spei_12m_stats(df_spei_pop_weighted, weights = "pop_weighted")
+```
+
+### Girl Population Weighted UTCI
+
+```{r}
+df_spei_girl_weighted_12m <- calculate_spei_12m_stats(df_spei_girl_weighted, weights = "girl_weighted")
+```
 
 # Combine climate variables
 
@@ -197,6 +266,21 @@ df_clim_12m <- (
     by = c("country", "adm_code", "adm_name", "date"),
     all.x = TRUE
   )
+  %>% merge(
+    df_spei_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_pop_weighted_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_spei_girl_weighted_12m,
+    by = c("country", "adm_code", "adm_name", "date"),
+    all.x = TRUE
+  )
   # %>% mutate(
   #   adm_name = case_when(
   #     adm_name == "Harare Chitungwiza" ~ "Harare",
@@ -214,7 +298,7 @@ df_clim_12m <- (
   ggplot(
     data = df_clim_12m %>% filter(date > "2015-01-01"), 
     aes(
-      x = dev_value_temp_2m_max_above_1sd_12m, 
+      x = dev_value_temp_above_1sd_12m, 
       fill = country
     )
   )
@@ -1374,5 +1458,5 @@ ggsave(
 # Save data
 
 ```{r}
-df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily_admin2.csv"))
+df_clim_12m %>% write_csv(file.path(out_data_dir, "processed_utci_temp_spei_daily_admin2.csv"))
 ```

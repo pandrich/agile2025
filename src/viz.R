@@ -903,9 +903,9 @@ plot_mono_marginal_by_group_2 <- function(fit, data, covs, group = "country", li
   p
 }
 
-plot_continuous_marginal <- function(fit, data, covs, grid_points = 20, lims = NULL) {
+plot_continuous_marginal <- function(fit, data, covs, grid_points = 20, ndraws = 4000, lims = NULL) {
   p <- (
-    generate_cont_marginal_df(fit, data, covs, grid_points)
+    generate_cont_marginal_df(fit, data, covs, grid_points, ndraws = ndraws)
     %>% ggplot(
       aes(
         x = covariate_value, 
@@ -936,30 +936,30 @@ plot_continuous_marginal <- function(fit, data, covs, grid_points = 20, lims = N
       strip.position = "bottom"
     )
     + labs(
-      y = "Marginal expected\np(violence)",
+      y = "Marginal expected\nviolence (%)",
     ) 
     + scale_y_continuous(
       limits = lims,
-      labels = scales::percent_format(accuracy = 1)
+      labels = function(x) format(x * 100, nsmall = 0)
     )
     + theme(
       panel.background = element_blank(),
       panel.grid = element_blank(),
       panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
       plot.background = element_blank(),
-      plot.title = element_text(size = 16, hjust = 0.5),
-      plot.subtitle = element_text(size = 14, hjust = 0.5),,
-      axis.title.y = element_text(size = 16),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),,
+      axis.title.y = element_text(size = 14),
       axis.title.x = element_blank(),
-      axis.text.y = element_text(size = 15),
-      axis.text.x = element_text(size = 15),
+      axis.text.y = element_text(size = 13),
+      axis.text.x = element_text(size = 13),
       legend.background = element_blank(),
       legend.title = element_blank(),
-      legend.text = element_text(size = 15),
+      legend.text = element_text(size = 13),
       legend.position = "inside",
       legend.position.inside = c(0.15, 0.8),
       strip.placement = "outside",
-      strip.text = element_text(size = 15),
+      strip.text = element_text(size = 13),
       strip.background = element_blank()
     )
   )
@@ -967,10 +967,10 @@ plot_continuous_marginal <- function(fit, data, covs, grid_points = 20, lims = N
 }
 
 
-plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points = 20, group = "country", lims = NULL) {
+plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points = 20, ndraws = 4000, group = "country", lims = NULL) {
   n_groups <- length(unique(data[[group]]))
   p <- (
-    generate_single_cont_marginal_by_group_df(fit, data, cov, grid_points, group = group)
+    generate_single_cont_marginal_by_group_df(fit, data, cov, grid_points, ndraws = ndraws, group = group)
     %>% ggplot(
       mapping = aes(
         x = covariate_value, 
@@ -1012,37 +1012,27 @@ plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points
     )
     + labs(
       x = label_map[[cov]],
-      y = "Marginal expected\np(violence)"
+      y = "Marginal expected\nviolence (%)"
     ) 
     + scale_y_continuous(
       limits = lims,
-      labels = scales::percent_format(accuracy = 1)
+      labels = function(x) format(x * 100, nsmall = 0)
     )
-    # + paletteer::scale_color_paletteer_d(
-    #   "wesanderson::Zissou1"
-    # )
-    # + paletteer::scale_fill_paletteer_d(
-    #   "wesanderson::Zissou1"
-    # )
     + theme(
       panel.background = element_blank(),
       panel.grid = element_blank(),
       panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
       plot.background = element_blank(),
-      plot.title = element_text(size = 16, hjust = 0.5),
-      plot.subtitle = element_text(size = 14, hjust = 0.5),,
-      axis.title = element_text(size = 16),
-      axis.text = element_text(size = 15),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      plot.subtitle = element_text(size = 13, hjust = 0.5),,
+      axis.title = element_text(size = 14),
+      axis.text = element_text(size = 13),
       legend.background = element_blank(),
       legend.title = element_blank(),
-      legend.text = element_text(size = 15),
-      strip.text = element_text(size = 15),
+      legend.text = element_text(size = 13),
+      strip.text = element_text(size = 13),
       strip.background = element_blank()
     )
-    # + guides(
-    #   color = "none",
-    #   fill = "none"
-    # )
   )
   p
 }
@@ -1260,13 +1250,13 @@ plot_moran_residuals <- function(fit, data, shapes) {
   moran_plot
 }
 
-plot_moran <- function(data, shapes, fit = NULL, outcome_var = NULL, residuals = FALSE) {
+plot_moran <- function(data, shapes, fit = NULL, outcome_var = NULL, residuals = FALSE, ndraws = 4000) {
   
   if (residuals) {
     xlab <- "p(viol, res.)"
     df <- (
       data
-      %>% add_residual_draws(fit)
+      %>% add_residual_draws(fit, ndraws = ndraws)
       %>% group_by(country, adm_name)
       %>% summarise(
         value = mean(.residual, na.rm = TRUE),

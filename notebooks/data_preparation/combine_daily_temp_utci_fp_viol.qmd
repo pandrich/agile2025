@@ -26,6 +26,12 @@ viol_file <- sort(list.files(file.path(proc_data_dir, "VACS_clean"), pattern = "
 nb_name <-  "Build final dataset"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 set.seed(seed)
+
+# File Naming
+date <- str_remove_all(lubridate::today(), "-")
+
+# Data Params
+countries <- c("Lesotho", "Mozambique", "Namibia", "Zambia", "Zimbabwe")
 ```
 
 ```{r}
@@ -49,6 +55,7 @@ df_pop <- (
   %>% mutate(
     log_pop_density = log10(pop)
   )
+  %>% filter(country %in% countries)
   %>% select(
     country,
     adm_code,
@@ -60,14 +67,17 @@ df_pop <- (
 
 ## Climate
 
-The dataset contains entries for each day (note that the SPEI data occurs only once a month as it is on a monthly basis). To match it with the violence data we calculate the mean over all the entries in each month. This represents an average exposure for respondents in that month. Alternatively we could look at maximum.
+The dataset contains entries for each day, to match it with the violence data we calculate the max over all the entries in each month. This represents the maximum exposure for respondents in that month. Alternatively we could look at the mean.
+
+### Temperature
 
 ```{r}
-df_clim <- (
+df_temp <- (
   read_csv(
-    file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"),
+    file.path(proc_data_dir, "processed_temp_daily.csv"),
     show_col_types = FALSE
   )
+  %>% filter(country %in% countries)
   %>% group_by(
     country,
     adm_code,
@@ -75,7 +85,33 @@ df_clim <- (
     date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
   )
   %>% summarise(
-    across(everything(), ~ mean(., na.rm = TRUE)),
+    across(everything(), ~ max(., na.rm = TRUE)),
+    .groups = "drop"
+  )
+)
+```
+
+```{r}
+colSums(is.na(df_temp))
+```
+
+### UTCI
+
+```{r}
+df_utci <- (
+  read_csv(
+    file.path(proc_data_dir, "processed_utci_daily.csv"),
+    show_col_types = FALSE
+  )
+  %>% filter(country %in% countries)
+  %>% group_by(
+    country,
+    adm_code,
+    adm_name,
+    date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
+  )
+  %>% summarise(
+    across(everything(), ~ max(., na.rm = TRUE)),
     .groups = "drop"
   )
 )
@@ -128,11 +164,19 @@ df_viol <- (
 
 # Combine datasets
 
-## Climate and Food Prices
-
 ```{r}
 df_clim_fp <- (
-  df_clim
+  df_temp
+  %>% merge(
+    df_utci,
+    by = c(
+      "country",
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
   %>% merge(
     df_food_prices,
     by = c(
@@ -143,17 +187,12 @@ df_clim_fp <- (
     ),
     all.x = TRUE
   )
-  %>% filter(
-    !is.na(food_price_anomaly)
-  )
   %>% select(-adm_code)
 )
 ```
 
-## All
-
 ```{r}
-df_clim_fp_viol <- (
+df_clim_viol <- (
   df_viol
   %>% merge(
     df_pop,
@@ -164,9 +203,19 @@ df_clim_fp_viol <- (
     all.x = TRUE
   )
   %>% merge(
-    df_clim,
+    df_temp,
     by = c(
       "country", 
+      "adm_code",
+      "adm_name",
+      "date"
+    ),
+    all.x = TRUE
+  )
+  %>% merge(
+    df_utci,
+    by = c(
+      "country",
       "adm_code",
       "adm_name",
       "date"
@@ -189,8 +238,8 @@ df_clim_fp_viol <- (
 
 ```{r}
 (
-  df_clim_fp_viol
-  %>% filter(is.na(value_utci_max_above_1sd_12m))
+  df_clim_viol
+  %>% filter(is.na(dev_value_pop_weighted_temp_max_12m))
 )
 ```
 
@@ -198,10 +247,9 @@ df_clim_fp_viol <- (
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
 (
   ggplot(
-    data = df_clim_fp_viol, 
+    data = df_clim_viol, 
     aes(
-      # x = dev_value_utci_max_above_32_12m,
-      x = value_spei_below_m1_12m,
+      x = dev_value_pop_weighted_temp_max_12m,
       fill = country
     )
   )
@@ -231,6 +279,6 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
 # Save
 
 ```{r}
-df_clim_fp %>% write_csv(file.path(model_data_dir, "climate_food_prices.csv"))
-df_clim_fp_viol %>% write_csv(file.path(model_data_dir, "climate_food_prices_violence.csv"))
+df_clim_fp %>% write_csv(file.path(model_data_dir, paste0("climate_fp_", date, ".csv")))
+df_clim_viol %>% write_csv(file.path(model_data_dir, paste0("climate_fp_violence_", date, ".csv")))
 ```
