@@ -2449,7 +2449,7 @@ prior_list_sp <- c(
   # prior(student_t(3, -2, 2), class = "Intercept"),
   prior(normal(-2, 2), class = "Intercept"),
   prior(normal(0, 0.8 / sqrt(num_pred)), class = "b"),
-  # prior(exponential(1/0.2), class = "sd"),
+  prior(exponential(1/0.2), class = "sd"),
   prior(dirichlet(1), class = "simo", coef = "moschool_level1"),
   prior(beta(1, 1), class = "car"),
   # prior(beta(1, 1), class = "rhocar"),
@@ -2471,6 +2471,7 @@ form_sp <- bf(
         + mo(school_level)
         + clim
         # + (1 | adm_name/cluster)
+        + (1 | cluster)
         + car(W, gr = adm_name, type = 'escar')
       )"
     )
@@ -2485,7 +2486,7 @@ fit_sp <- brm(
   stanvars = stanvars,
   seed = seed,
   refresh = 1000,
-  iter = 4000,
+  # iter = 4000,
   control = list(adapt_delta = adapt_delta),
   # sample_prior = "only"
   sample_prior = TRUE
@@ -2512,6 +2513,7 @@ bayesplot::mcmc_pairs(
     "b_Intercept", 
     # "sd_adm_name__Intercept",
     # "sd_adm_name:cluster__Intercept",
+    "sd_cluster__Intercept",
     # "r_country[Lesotho,clim]",
     "b_rural",
     "b_live_with_partner",
