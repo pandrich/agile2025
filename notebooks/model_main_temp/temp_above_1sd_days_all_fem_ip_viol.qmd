@@ -2225,7 +2225,7 @@ df_clim_ranef_cou <- (
 ```
 
 ```{r}
-#| fig-width: 5
+#| fig-width: 4
 #| fig-height: 3
 
 lims <- c(
@@ -2336,10 +2336,11 @@ p2 <- (
     panel.grid = element_blank(),
     panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
     plot.background = element_blank(),
-    plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 14, hjust = 0.5),,
-    axis.title = element_text(size = 16),
-    axis.text = element_text(size = 15),
+    plot.title = element_text(size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),,
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_blank(),
+    axis.text = element_text(size = 13),
   )
   + labs(
     y = "Country",
