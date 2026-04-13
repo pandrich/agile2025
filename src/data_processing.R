@@ -438,7 +438,11 @@ calculate_temp_12m_stats_monthly_ave <- function(df_temp_daily, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      dev_value = value - mean_value,
+      dev_value = if_else(
+        sd_value == 0,
+        0,
+        (value - mean_value) / sd_value
+      ),
       variable = paste0(variable_name, "_", variable)
     )
     %>% filter(!is.na(value))
@@ -510,12 +514,11 @@ calculate_spei_12m_stats <- function(df_spei, weights = "") {
     )
     %>% ungroup()
     %>% mutate(
-      dev_value = value - mean_value,
-      # dev_value = if_else(
-      #   sd_value == 0,
-      #   0,
-      #   (value - mean_value) / sd_value
-      # ),
+      dev_value = if_else(
+        sd_value == 0,
+        0,
+        (value - mean_value) / sd_value
+      ),,
       variable = paste0(variable_name, "_", variable)
     )
     %>% filter(!is.na(value))

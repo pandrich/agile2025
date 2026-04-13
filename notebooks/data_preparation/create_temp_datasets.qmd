@@ -805,7 +805,6 @@ plot_extent <- terra::ext(xlims[1] - 0.5, xlims[2] + 0.5, ylims[1] - 0.5, ylims[
 
 ## Temperature in country
 
-
 ```{r}
 rast_temp_moz <- rast_temp %>% terra::crop(terra::vect(sf_moz %>% st_union()))
 rast_times <- terra::time(rast_temp_moz)

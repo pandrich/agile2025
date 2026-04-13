@@ -74,7 +74,7 @@ The dataset contains entries for each day, to match it with the violence data we
 ```{r}
 df_temp <- (
   read_csv(
-    file.path(proc_data_dir, "processed_temp_daily.csv"),
+    file.path(proc_data_dir, "processed_temp_daily_max.csv"),
     show_col_types = FALSE
   )
   %>% filter(country %in% countries)
@@ -300,12 +300,6 @@ df_clim_viol <- (
 )
 ```
 
-```{r}
-(
-  df_clim_viol
-  %>% filter(is.na(dev_value_pop_weighted_temp_max_12m))
-)
-```
 
 ```{r}
 col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F")
@@ -313,7 +307,7 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
   ggplot(
     data = df_clim_viol, 
     aes(
-      x = dev_value_pop_weighted_temp_max_12m,
+      x = dev_value_temp_max_12m,
       fill = country
     )
   )
@@ -343,6 +337,6 @@ col_palette <- c("#dc7726", "#eebb93", "#ecc046","#0292b7", "#81c9db", "#35A29F"
 # Save
 
 ```{r}
-df_clim_fp %>% write_csv(file.path(model_data_dir, paste0("climate_fp_", date, ".csv")))
-df_clim_viol %>% write_csv(file.path(model_data_dir, paste0("climate_fp_violence_", date, ".csv")))
+df_clim_fp %>% write_csv(file.path(model_data_dir, paste0("climate_fp_max_", date, ".csv")))
+df_clim_viol %>% write_csv(file.path(model_data_dir, paste0("climate_fp_violence_max_", date, ".csv")))
 ```

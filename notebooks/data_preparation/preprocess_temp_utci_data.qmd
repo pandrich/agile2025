@@ -43,7 +43,7 @@ source(file.path(src_dir, "data_processing.R"))
 ```{r}
 df_temp <- (
   read_csv(
-    file.path(proc_data_dir, "temp_2m", "temp_max_daily_all_countries.csv"),
+    file.path(proc_data_dir, "climate/temp_2m", "temp_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
 )
@@ -54,7 +54,7 @@ df_temp <- (
 ```{r}
 df_temp_pop_weighted <- (
   read_csv(
-    file.path(proc_data_dir, "temp_2m", "weighted_temp_max_daily_all_countries.csv"),
+    file.path(proc_data_dir, "climate/temp_2m", "weighted_temp_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
   %>% select(-pop)
@@ -68,7 +68,7 @@ df_temp_girl_weighted <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "temp_2m",
+      "climate/temp_2m",
       "age_weighted_temp_max_daily_all_countries.csv"
     ),
     show_col_types = FALSE
@@ -86,7 +86,7 @@ There are 10 UTCI thermal stress categories that correspond to specific human ph
 ```{r}
 df_utci <- (
   read_csv(
-    file.path(proc_data_dir, "UTCI", "utci_max_daily_all_countries.csv"),
+    file.path(proc_data_dir, "climate/utci", "utci_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
 )
@@ -97,7 +97,7 @@ df_utci <- (
 ```{r}
 df_utci_pop_weighted <- (
   read_csv(
-    file.path(proc_data_dir, "UTCI", "weighted_utci_max_daily_all_countries.csv"),
+    file.path(proc_data_dir, "climate/utci", "weighted_utci_max_daily_all_countries.csv"),
     show_col_types = FALSE
   )
   %>% select(-pop)
@@ -111,7 +111,7 @@ df_utci_girl_weighted <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "UTCI",
+      "climate/utci",
       "age_weighted_utci_max_daily_all_countries.csv"
     ),
     show_col_types = FALSE
@@ -141,7 +141,6 @@ colSums(is.na(df_temp_12m))
 ```{r}
 df_temp_roll_12m <- calculate_temp_12m_stats(df_temp, roll = TRUE, roll_days = 3)
 ```
-
 
 ```{r}
 colSums(is.na(df_temp_roll_12m))
@@ -321,9 +320,7 @@ df_all_utci_12m <- (
 )
 ```
 
-
 # Visualizations
-
 
 ## Temperature
 

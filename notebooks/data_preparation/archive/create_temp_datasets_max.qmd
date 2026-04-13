@@ -1,0 +1,193 @@
+---
+title: "temp Analysis"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(tidyterra)
+library(sf)
+library(paletteer)
+library(patchwork)
+
+# Path Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+raw_data_dir <- root("data/raw")
+proc_data_dir <- root("data/processed/climate/temp_2m")
+dir.create(proc_data_dir, showWarnings = FALSE)
+fig_dir <- root("figures")
+
+# Country Mapping
+country_map <- c(
+  "MOZ" = "Mozambique",
+  "ZWE" = "Zimbabwe",
+  "LSO" = "Lesotho",
+  "NAM" = "Namibia",
+  "ZMB" = "Zambia"
+)
+```
+
+# Functions
+
+```{r}
+build_temp_daily <- function(rast_temp, adm_shapes) {
+  df_temp <- (
+    rast_temp
+    %>% exactextractr::exact_extract(
+      adm_shapes,
+      fun = "max",
+      max_cells_in_memory = 176067000,
+      append_cols = c("country", "adm_code", "adm_name")
+    )
+  )
+  colnames(df_temp) <- c("country", "adm_code", "adm_name", as.character(terra::time(rast_temp)))
+  
+  df_temp <- (
+    df_temp
+    %>% pivot_longer(
+      cols = -c("country", "adm_code", "adm_name"),
+      names_to = "date",
+      values_to = "temp_2m_max"
+    )
+    %>% mutate(
+      date = as.Date(date, format = "%Y-%m-%d"),
+      temp_2m_max = temp_2m_max - 273.15
+    )
+  )
+  df_temp
+}
+```
+
+# Data Import
+
+## Geographies
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zimbabwe
+
+```{r}
+sf_zwe <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zimbabwe 2015 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Lesotho
+
+```{r}
+sf_lso <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Lesotho 2023 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Namibia
+
+```{r}
+sf_nam <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Namibia 2013 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Zambia
+
+```{r}
+sf_zmb <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Zambia 2018 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+    sf_zwe,
+    sf_lso,
+    sf_nam,
+    sf_zmb
+  )
+)
+```
+
+## Temperature
+
+Data from ERA5 received from Neil
+
+```{r}
+rast_temp <- terra::rast(
+  file.path(
+    raw_data_dir, 
+    "temp_2m",
+    "era5_t2m_max_2000-2022.nc"
+  )
+)
+```
+
+# Generate dataset
+
+```{r}
+df_temp <- build_temp_daily(rast_temp, sf_all)
+```
+
+# Save
+
+```{r}
+df_temp %>% write_csv(file.path(proc_data_dir, "temp_max_daily_all_countries_max.csv"))
+```
+
