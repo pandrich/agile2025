@@ -51,7 +51,7 @@ df_clim <- (
     date = lubridate::ceiling_date(date, "month") - lubridate::days(1)
   )
   %>% summarise(
-    across(everything(), ~ mean(., na.rm = TRUE)),
+    across(everything(), ~ max(., na.rm = TRUE)),
     .groups = "drop"
   )
   %>% mutate(

@@ -129,7 +129,7 @@ df_spei <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "SPEI",
+      "climate/spei",
       "spei_all_countries.csv"
     ),
     show_col_types = FALSE
@@ -144,7 +144,7 @@ df_spei_pop_weighted <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "SPEI",
+      "climate/spei",
       "weighted_spei_all_countries.csv"
     ),
     show_col_types = FALSE
@@ -160,7 +160,7 @@ df_spei_girl_weighted <- (
   read_csv(
     file.path(
       proc_data_dir,
-      "SPEI",
+      "climate/spei",
       "age_weighted_spei_all_countries.csv"
     ),
     show_col_types = FALSE
@@ -243,37 +243,38 @@ df_spei_girl_weighted_12m <- calculate_spei_12m_stats(df_spei_girl_weighted, wei
 
 ```{r}
 df_clim_12m <- ( 
-  df_utci_12m
-  %>% merge(
-    df_utci_pop_weighted_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
-  %>% merge(
-    df_utci_girl_weighted_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
-  %>% merge(
-    df_temp_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
-  %>% merge(
-    df_temp_pop_weighted_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
-  %>% merge(
-    df_temp_girl_weighted_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
-  %>% merge(
-    df_spei_12m,
-    by = c("country", "adm_code", "adm_name", "date"),
-    all.x = TRUE
-  )
+  df_spei_12m
+  # df_utci_12m
+  # %>% merge(
+  #   df_utci_pop_weighted_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
+  # %>% merge(
+  #   df_utci_girl_weighted_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
+  # %>% merge(
+  #   df_temp_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
+  # %>% merge(
+  #   df_temp_pop_weighted_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
+  # %>% merge(
+  #   df_temp_girl_weighted_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
+  # %>% merge(
+  #   df_spei_12m,
+  #   by = c("country", "adm_code", "adm_name", "date"),
+  #   all.x = TRUE
+  # )
   %>% merge(
     df_spei_pop_weighted_12m,
     by = c("country", "adm_code", "adm_name", "date"),
@@ -1463,5 +1464,6 @@ ggsave(
 # Save data
 
 ```{r}
-df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"))
+# df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_utci_temp_spei_daily.csv"))
+df_clim_12m %>% write_csv(file.path(proc_data_dir, "processed_spei_daily.csv"))
 ```

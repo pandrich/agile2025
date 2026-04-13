@@ -1,0 +1,1534 @@
+---
+title: "Model temperature (number of excess hot days) effect on non-partner sexual violence, all female, Mozambique"
+format: html
+editor: visual
+---
+
+# Environment Setup
+
+```{r setup}
+# Packages
+library(tidyverse)
+library(sf)
+library(spdep)
+library(brms)
+options(brms.backend = "cmdstanr", mc.cores = 4)
+library(cmdstanr)
+library(posterior)
+library(ggdist)
+library(bayesplot)
+library(tidybayes)
+# theme_set(bayesplot::theme_default(base_family = "sans", base_size=14))
+library(patchwork)
+library(paletteer)
+library(tidytext)
+library(reliabilitydiag)
+
+# Folder Structure
+root <- rprojroot::has_file("agile2025.Rproj")$make_fix_file()
+temp_dir <- root("temp")
+dir.create(temp_dir, showWarnings = FALSE)
+raw_data_dir <- root("data/raw")
+model_data_dir <- root("data/processed/model_data")
+fig_dir <- root("figures")
+dir.create(fig_dir, showWarnings = FALSE)
+mod_dir <- root("models")
+src_dir <- root("src")
+
+# Climate + violence data file
+clim_fp_filename <- sort(list.files(model_data_dir, pattern = "climate_fp_\\d", full.names = TRUE), decreasing = TRUE)[[1]]
+clim_fp_viol_filename <- sort(list.files(model_data_dir, pattern = "climate_fp_violence", full.names = TRUE), decreasing = TRUE)[[1]]
+cat(paste0("Using data files:\n", clim_fp_filename, "\n", clim_fp_viol_filename))
+```
+
+# Notebook settings
+
+```{r}
+# Settings
+nb_name <-  "Model effect of excess number of hot days on non-partner sexual violence, all female, Mozambique"
+seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
+set.seed(seed)
+
+# Viz settings
+col_palette <- c("#dc7726", "#eebb93", "#ecc046", "#f6e0a3", "#0292b7", "#81c9db", "#35A29F", "#97DECE")
+label_map <- c(
+  live_with_partner = "Live with partner (%)",
+  school_level = "Education attainment (%)",
+  rural = "Rural area (%)",
+  over_18 = "Over 18 (%)",
+  value_price_index_hist_anomaly_12m = "Months of food stress",
+  value_price_index_reg_anomaly_12m = "Months of food stress",
+  value_max_price_index_12m = "Max price of maize",
+  value_price_index_stress_12m = "Food price stressed",
+  dev_value_price_index_hist_anomaly_12m = "Excess Months of food stress",
+  dev_value_price_index_reg_anomaly_12m = "Excess Months of food stress",
+  dev_value_max_price_index_12m = "Excess Max price of maize",
+  clim = "Excess hot days (std.)",
+  sv = "NP-SV victimisation (%)"
+)
+
+# Var settings
+countries <- c("Mozambique")
+clim_var <- "dev_value_temp_above_1sd_12m"
+clim_label <- "excess_hot_days"
+viol_var <- "sv_np"
+viol_label <- "np_viol"
+pop_label <- "all_female"
+covars <- c(
+  "sample_weight",
+  "country",
+  "adm_name",
+  "cluster",
+  "rural",
+  "over_18",
+  "school_level",
+  "live_with_partner",
+  "value_price_index_hist_anomaly_12m",
+  "value_price_index_reg_anomaly_12m",
+  "value_max_price_index_12m",
+  "value_price_index_stress_12m",
+  "dev_value_price_index_hist_anomaly_12m",
+  "dev_value_price_index_reg_anomaly_12m",
+  "dev_value_max_price_index_12m",
+  viol_var
+)
+vars <- c(covars, clim_var)
+
+bin_covs <- c(
+  "rural",
+  "over_18",
+  "live_with_partner" ,
+  "value_price_index_stress_12m"
+)
+mono_covs <- c(
+  "value_price_index_hist_anomaly_12m",
+  "value_price_index_reg_anomaly_12m",
+  "dev_value_price_index_hist_anomaly_12m",
+  "dev_value_price_index_reg_anomaly_12m",
+  "school_level"
+)
+cont_covs <- c(
+  "clim",
+  "value_max_price_index_12m",
+  "dev_value_max_price_index_12m"
+)
+
+# Computation settings
+adapt_delta = 0.95
+iter = 2000
+```
+
+# Functions
+
+```{r}
+source(file.path(src_dir, "viz.R"))
+source(file.path(src_dir, "model_check_utils.R"))
+
+standardize <- function(x) {
+  (x - mean(x)) / sd(x)
+}
+```
+
+# Import Data
+
+## Geometries
+
+### Mozambique
+
+```{r}
+sf_moz <- (
+  st_read(
+    file.path(raw_data_dir, "geographies", "Mozambique 2022 DHS - sdr_subnational_boundaries", "shps", "sdr_subnational_boundaries.shp")
+  )
+  %>% st_make_valid()
+  %>% rename_with(tolower)
+  %>% select(
+    country = cntrynamee,
+    adm_name = dhsregen,
+    adm_code = regcode
+  )
+  %>% arrange(adm_code)
+)
+```
+
+### Create combined shapes
+
+```{r}
+sf_all <- (
+  bind_rows(
+    sf_moz,
+  )
+  %>% st_transform(3857)
+  %>% mutate(
+    centroid = st_centroid(geometry),
+    lon = st_coordinates(centroid)[,1],
+    lat = st_coordinates(centroid)[,2]
+  )
+)
+```
+
+## Climate & Food Prices
+
+```{r}
+df_clim <- (
+  read_csv(
+    clim_fp_filename,
+    show_col_type = FALSE
+  )
+  %>% filter(
+    country %in% countries
+  )
+)
+```
+
+## Survey Data
+
+```{r}
+df_clim_viol <- (
+  read_csv(
+    clim_fp_viol_filename,
+    show_col_type = FALSE
+  )
+  %>% filter(
+    !is.na(sample_weight),
+    country %in% countries
+  )
+  %>% group_by(country)
+  %>% mutate(
+    country_sample_weight = sum(sample_weight, na.rm = TRUE)
+  )
+  %>% ungroup()
+  %>% mutate(
+    sample_weight = (
+      1E-3 
+      * sample_weight 
+      * (
+        sum(sample_weight, na.rm = TRUE) 
+        / (length(unique(country)) * country_sample_weight)
+      )
+    ),
+    over_18 = as.numeric(age > 18)
+  )
+)
+```
+
+```{r}
+df_clim_viol_adm <- (
+  df_clim_viol
+  %>% group_by(country, adm_name)
+  %>% summarise(
+    clim = mean(!!sym(clim_var), na.rm = TRUE),
+    rural = 100 * sum(rural * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    live_with_partner = 100 *sum(live_with_partner * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    over_18 = 100 * sum(over_18 * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    school_level = sum(school_level * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    value_max_price_index_12m = mean(value_max_price_index_12m, na.rm = TRUE),
+    value_price_index_hist_anomaly_12m = mean(value_price_index_hist_anomaly_12m, na.rm = TRUE),
+    value_price_index_reg_anomaly_12m = mean(value_price_index_reg_anomaly_12m, na.rm = TRUE),
+    value_price_index_stress_12m = mean(value_price_index_stress_12m, na.rm = TRUE),
+    dev_value_max_price_index_12m = mean(dev_value_max_price_index_12m, na.rm = TRUE),
+    dev_value_price_index_hist_anomaly_12m = mean(dev_value_price_index_hist_anomaly_12m, na.rm = TRUE),
+    dev_value_price_index_reg_anomaly_12m = mean(dev_value_price_index_reg_anomaly_12m, na.rm = TRUE),
+    dev_value_price_index_stress_12m = mean(dev_value_price_index_stress_12m, na.rm = TRUE),
+    sv := 100 * sum(!!sym(viol_var) * sample_weight, na.rm = TRUE) / sum(sample_weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+  %>% merge(
+    sf_all,
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% st_as_sf()
+)
+```
+
+# Viz
+
+## Covariate Maps
+
+```{r}
+#| fig-width: 10
+#| fig-height: 10
+p1 <- (
+  ggplot(data = df_clim_viol_adm)
+  + geom_sf(
+    mapping = aes(fill = over_18),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Greys",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Over 18 (%)"
+  )
+)
+
+p2 <- (
+  ggplot(data = df_clim_viol_adm)
+  + geom_sf(
+    mapping = aes(fill = rural),
+    color = "transparent"
+  )
+  + scale_fill_paletteer_c(
+    palette = "ggthemes::Orange-Blue Diverging",
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Rural level (%)"
+  )
+)
+
+p3 <- (
+  ggplot(data = df_clim_viol_adm)
+  + geom_sf(
+    mapping = aes(fill = live_with_partner),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Blues",
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Live with partner (%)"
+  )
+)
+
+p4 <- (
+  ggplot(data = df_clim_viol_adm)
+  + geom_sf(
+    mapping = aes(fill = school_level),
+    color = "transparent"
+  )
+  + scale_fill_distiller(
+    palette = "Greens",
+    direction = -1
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "School Attainment"
+  )
+)
+
+p5 <- (
+  ggplot(data = df_clim_viol_adm)
+  + geom_sf(
+    mapping = aes(fill = dev_value_price_index_reg_anomaly_12m),
+    color = "transparent"
+  )
+  + scale_fill_viridis_c(
+    option = "viridis",
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14)
+  )
+  + labs(
+    fill = "Food Stress Months"
+  )
+)
+
+# layout <- "
+#   ABE
+#   CDE
+# "
+layout <- "
+  ABC
+  DEF
+"
+
+(
+  (p1 + p2 + p3 + p4 + p5 + plot_spacer())
+  + plot_layout(
+    # widths = c(1, 1, 1.5),
+    design = layout
+  )
+)
+  
+ggsave(
+  path = fig_dir,
+  filename = paste0("variable_comparison_", clim_label, "_", pop_label, "_", viol_label, "_food_test.png")
+)
+```
+
+## Climate
+
+```{r}
+#| fig-width: 8
+#| fig-height: 6
+(
+  ggplot()
+  + geom_histogram(
+    data = df_clim,
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim"
+    ),
+    alpha = 0.7,
+    bins = 20
+  )
+  + geom_histogram(
+    data = df_clim_viol,
+    mapping = aes(
+      y = after_stat(ncount),
+      x = !!sym(clim_var),
+      fill = "clim_viol"
+    ),
+    alpha = 0.6,
+    bins = 20
+  )
+  + geom_vline(
+    xintercept = 0,
+    color = "black",
+    linetype = "dashed"
+  )
+  + facet_wrap(
+    ~ adm_name,
+    ncol = 4
+  )
+  + scale_fill_manual(
+    values = c(
+      "clim" = col_palette[2],
+      "clim_viol" = col_palette[5]
+    ),
+    labels = c(
+      "clim" = "Climate variable distribution",
+      "clim_viol" = "Climate at survey"
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 13),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 13),
+    legend.background = element_blank(),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 13),
+    legend.position = "inside",
+    legend.position.inside = c(0.5, 0.1)
+  )
+  + labs(
+    y = "Counts (norm.)",
+    x = "Excess hot days"
+  )
+)
+```
+
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 3
+
+rng_clim <- range(df_clim_viol_adm$clim, na.rm = TRUE)
+
+(
+  df_clim_viol_adm
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(fill = clim),
+    color = "black",
+    linewidth = 0.1
+  )
+  + paletteer::scale_fill_paletteer_c(
+    palette = "ggthemes::Orange-Blue Diverging",
+    direction = -1,
+    guide = guide_colorbar(
+      label.position = "left",
+      title.position = "right",
+      title.vjust = 1,
+      title.hjust = 0.5,
+      barheight = unit(0.9, "npc")
+    ),
+    limits = rng_clim,
+    rescaler = ~ scales::rescale_mid(., mid = 0),
+    # oob = scales::squish
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.margin = margin(l = 0, r = 25),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.position = "inside",
+    legend.position.inside = c(1.30, 0.5),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14, angle = 90),
+    legend.ticks = element_line(color = "black")
+  )
+  + labs(
+    fill = "Excess hot days (std.)"
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = paste0("map_heat_", clim_label, "_", pop_label, "_", viol_label, "_moz_food_test.png")
+)
+```
+
+## Violence
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 3
+
+rng_sv <- range(df_clim_viol_adm$sv, na.rm = TRUE)
+
+(
+  df_clim_viol_adm
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(fill = sv),
+    color = "black",
+    linewidth = 0.1
+  )
+  + paletteer::scale_fill_paletteer_c(
+    palette = "grDevices::Rocket",
+    direction = -1,
+    guide = guide_colorbar(
+      label.position = "left",
+      title.position = "right",
+      title.vjust = 1,
+      title.hjust = 0.5,
+      barheight = unit(0.9, "npc")
+    ),
+    limits = rng_sv,
+    # labels = scales::label_percent(accuracy = 1)
+    # rescaler = ~ scales::rescale_mid(., mid = 0),
+    # oob = scales::squish
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.margin = margin(r = 25),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.position = "inside",
+    legend.position.inside = c(1.30, 0.5),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14, angle = 90),
+    legend.ticks = element_line(color = "black")
+  )
+  + labs(
+    fill = label_map[["sv"]]
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = paste0("map_sv_", clim_label, "_", pop_label, "_", viol_label, "_moz_food_test.png")
+)
+```
+
+## Food Insecurity
+
+
+```{r}
+#| fig-width: 3.5
+#| fig-height: 3
+
+rng_sv <- range(df_clim_viol_adm$value_price_index_reg_anomaly_12m, na.rm = TRUE)
+
+(
+  df_clim_viol_adm
+  %>% ggplot()
+  + geom_sf(
+    mapping = aes(fill = value_price_index_reg_anomaly_12m),
+    color = "black",
+    linewidth = 0.1
+  )
+  + paletteer::scale_fill_paletteer_c(
+    palette = "grDevices::Purple-Yellow",
+    guide = guide_colorbar(
+      label.position = "left",
+      title.position = "right",
+      title.vjust = 1,
+      title.hjust = 0.5,
+      barheight = unit(0.9, "npc")
+    ),
+    limits = rng_sv,
+    # labels = scales::label_percent(accuracy = 1)
+    # rescaler = ~ scales::rescale_mid(., mid = 0),
+    # oob = scales::squish
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    plot.background = element_blank(),
+    plot.margin = margin(r = 25),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    legend.background = element_blank(),
+    legend.position = "inside",
+    legend.position.inside = c(1.30, 0.5),
+    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 14, angle = 90),
+    legend.ticks = element_line(color = "black")
+  )
+  + labs(
+    fill = label_map[["value_price_index_reg_anomaly_12m"]]
+  )
+)
+
+ggsave(
+  path = fig_dir,
+  filename = paste0("map_fp_", clim_label, "_", pop_label, "_", viol_label, "_moz_food_test.png")
+)
+```
+
+# Prepare Data
+
+## Restrict locations
+
+```{r}
+sf_vacs <- (
+  sf_all
+  %>% filter(
+    country %in% (df_clim_viol$country %>% unique()),
+    adm_name %in% (df_clim_viol$adm_name %>% unique())
+  )
+)
+```
+
+## Extract model subsets
+
+```{r}
+(
+  df_clim_viol
+  %>% filter(
+    female == 1,
+    # age > 14
+  )
+  %>% select(all_of(vars))
+  %>% na.omit()
+  %>% merge(
+    sf_vacs %>% as.data.frame() %>% select(country, adm_name),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% ggplot()
+  + geom_histogram(
+    mapping = aes(x = value_price_index_reg_anomaly_12m)
+  )
+  
+)
+```
+
+
+```{r}
+df_model <- (
+  df_clim_viol
+  %>% filter(
+    female == 1,
+    # age > 14
+  )
+  %>% select(all_of(vars))
+  %>% na.omit()
+  %>% merge(
+    sf_vacs %>% as.data.frame() %>% select(country, adm_name),
+    by = c("country", "adm_name"),
+    all.x = TRUE
+  )
+  %>% mutate(
+    country = factor(country),
+    adm_name = factor(adm_name),
+    cluster = factor(cluster),
+    school_level = factor(
+      school_level,
+      levels = sort(unique(school_level)),
+      ordered = TRUE
+    ),
+    value_price_index_hist_anomaly_12m = factor(
+      value_price_index_hist_anomaly_12m,
+      levels = sort(unique(value_price_index_hist_anomaly_12m)),
+      ordered = TRUE
+    ),
+    value_price_index_reg_anomaly_12m = factor(
+      value_price_index_reg_anomaly_12m,
+      levels = sort(unique(value_price_index_reg_anomaly_12m)),
+      ordered = TRUE
+    ),
+    clim := scale(!!sym(clim_var))
+  )
+)
+```
+
+## Generate adjacency matrix
+
+```{r}
+nb_list <- poly2nb(sf_vacs)
+W <- nb2mat(nb_list, style = "B", zero.policy = TRUE)
+rownames(W) <- sf_vacs$adm_name
+colnames(W) <- sf_vacs$adm_name
+levs <- levels(df_model$adm_name)
+W_ord <- W[levs, levs]
+```
+
+```{r}
+edges <- (
+  geostan::edges(W, unique_pairs_only = TRUE, shape = sf_vacs$geometry)
+)
+graph <- st_geometry(edges)
+```
+
+```{r}
+plot(sf_vacs$geometry, lwd = .15)
+plot(graph, add = TRUE, type = "p", col = "red")
+plot(graph, add = TRUE, type = "l", col = "black")
+```
+
+## Spatial correlation in raw data
+
+```{r}
+#| fig-width: 3
+#| fig-height: 3
+plot_moran(df_model, sf_vacs, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("moran_plot_obs_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_food_test.png")
+)
+```
+
+# Modeling
+
+## Random Intercepts by admin level and cluster
+
+```{r}
+pars_ranint_adm_clu <- c(
+  "b_Intercept",
+  "b_rural",
+  "b_live_with_partner",
+  "b_over_18",
+  "bsp_moschool_level",
+  "sd_adm_name__Intercept",
+  "sd_adm_name:cluster__Intercept",
+  "b_clim"
+)
+```
+
+```{r}
+stanvars <- stanvar(5, "num_pred")
+
+prior_list_ranint_adm_clu <- c(
+  prior(student_t(3, -2, 2), class = "Intercept"),
+  prior(normal(0, 0.8 / sqrt(num_pred)), class = "b"),
+  prior(exponential(1/0.2), class = "sd"),
+  prior(dirichlet(1), class = "simo", coef = "moschool_level1")
+)
+
+form_ranint_adm_clu <- bf(
+  as.formula(
+    paste(
+      viol_var,
+      "| weights(sample_weight)",
+      "~",
+      "(
+        1 
+        + rural
+        + live_with_partner
+        + over_18
+        + mo(school_level)
+        + clim
+        + (1 | adm_name/cluster)
+      )"
+    )
+  )
+)
+fit_ranint_adm_clu <- brm(
+  formula = form_ranint_adm_clu,
+  family = bernoulli("logit"),
+  prior = prior_list_ranint_adm_clu,
+  data = df_model,
+  stanvars = stanvars,
+  seed = seed,
+  refresh = 1000,
+  iter = iter,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_ranint_adm_clu$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(fit_ranint_adm_clu), 
+  pars = c(
+    "b_Intercept", 
+    "sd_adm_name__Intercept", 
+    "sd_adm_name:cluster__Intercept", 
+    "b_rural",
+    "b_live_with_partner",
+    "b_over_18",
+    "bsp_moschool_level", 
+    "b_clim"
+  ),
+  np = nuts_params(fit_ranint_adm_clu),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+```{r}
+plot(fit_ranint_adm_clu, variable = "prior_b", regex = TRUE, nvariables = 3)
+```
+
+```{r}
+plot(fit_ranint_adm_clu, variable = "b_rural", regex = TRUE, nvariables = 3)
+```
+
+```{r}
+bayestestR::effective_sample(fit_ranint_adm_clu)
+```
+
+### Model Output
+
+#### Summary
+
+##### Raw draws
+
+```{r}
+bayestestR::describe_posterior(
+  fit_ranint_adm_clu,
+  effects = "all",
+  component = "all",
+  test = c("p_direction", "p_significance"),
+  centrality = "all",
+  ci_method = "HDI"
+)
+```
+
+##### Transformed draws
+
+```{r}
+trans_post_ranint_adm_clu <- (
+  fit_ranint_adm_clu
+  %>% as.data.frame()
+  %>% select(
+    -c(
+      contains("adm_name"),
+      contains("prior"),
+      lprior, 
+      lp__,
+      Intercept
+    )
+  )
+  %>% mutate(
+    across(
+      -c(contains("simo")),
+      ~ exp(.)
+    )
+  )
+)
+```
+
+```{r}
+bayestestR::describe_posterior(
+  trans_post_ranint_adm_clu,
+  effects = "all",
+  component = "all",
+  test = c(),
+  centrality = "all",
+  ci_method = "HDI"
+)
+```
+
+#### Climate Marginal Effects
+
+##### Population level
+
+```{r}
+cont_marg_ranint_adm_clu <- generate_cont_marginal_df(fit_ranint_adm_clu, df_model, covs = c("clim"))
+```
+
+```{r}
+#| fig-width: 4
+#| fig-height: 3
+(
+  plot_continuous_marginal(fit_ranint_adm_clu, df_model, covs = c("clim"), grid_points = 20, ndraws = 4000)
+  + labs(
+    y = "NP violence (%)"
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_clim_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_ranint_adm_clu_food_test.png")
+)
+```
+
+#### Covariate Posterior Distribution
+
+##### Log odds
+
+```{r}
+df_cov_post_adm_clu <- (
+  fit_ranint_adm_clu
+  %>% as_tibble()
+  %>% select(
+    b_clim,
+    b_rural,
+    b_live_with_partner,
+    b_over_18,
+    bsp_moschool_level
+  )
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    median_val = median(value),
+    lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+    upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+    lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+    upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+  )
+  %>% ungroup()
+  %>% mutate(
+    type = "no_fp"
+  )
+)
+```
+
+##### OR
+
+```{r}
+df_cov_or_adm_clu <- (
+  fit_ranint_adm_clu
+  %>% as_tibble()
+  %>% select(
+    b_clim,
+    b_rural,
+    b_live_with_partner,
+    b_over_18,
+    bsp_moschool_level
+  )
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    value = exp(value)
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    median_val = median(value),
+    lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+    upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+    lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+    upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+  )
+  %>% ungroup()
+  %>% mutate(
+    type = "no_fp"
+  )
+)
+```
+
+
+### Calibration Checks
+
+```{r}
+#| fig-width: 4
+#| fig-height: 3
+plot_calibration(fit_ranint_adm_clu, df_model, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("calibration_plot_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_ranint_adm_clu_food_test.png")
+)
+```
+
+### Residuals Spatial Correlation Checks
+
+```{r}
+#| fig-width: 3.2
+#| fig-height: 3
+plot_moran(df_model, sf_vacs, fit = fit_ranint_adm_clu, residuals = TRUE)
+ggsave(
+  path = fig_dir,
+  filename = paste0("moran_plot_res_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_ranint_adm_clu_food_test.png")
+)
+```
+
+### Posterior Predictive Checks
+
+```{r}
+#| fig-width: 12
+#| fig-height: 2.5
+(
+  plot_ppc_rootogram(fit_ranint_adm_clu, df_model, outcome_var = viol_var)
+  + theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.92, 0.8)
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = paste0("ppc_by_adm_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_ranint_adm_clu_food_test.png")
+)
+```
+
+## With food prices
+
+```{r}
+pars_fp <- c(
+  "b_Intercept",
+  "b_rural",
+  "b_live_with_partner",
+  "b_over_18",
+  "bsp_moschool_level",
+  # "bsp_moprice_index_reg_anomaly_12m1",
+  "sd_adm_name__Intercept",
+  "sd_adm_name:cluster__Intercept",
+  "b_clim"
+)
+```
+
+```{r}
+stanvars <- stanvar(6, "num_pred")
+
+prior_list_fp <- c(
+  prior(student_t(3, -3, 1), class = "Intercept"),
+  prior(normal(0, 0.8 / sqrt(num_pred)), class = "b"),
+  prior(exponential(1/0.2), class = "sd"),
+  prior(dirichlet(1), class = "simo", coef = "moschool_level1")
+  # prior(dirichlet(1), class = "simo", coef = "moprice_index_reg_anomaly_12m1")
+)
+
+form_fp <- bf(
+  as.formula(
+    paste(
+      viol_var,
+      "| weights(sample_weight)",
+      "~",
+      "(
+        1 
+        + rural
+        + live_with_partner
+        + over_18
+        + mo(school_level)
+        + clim
+        + (1 | adm_name/cluster)
+        + mo(value_price_index_reg_anomaly_12m)
+      )"
+    )
+  )
+)
+fit_fp <- brm(
+  formula = form_fp,
+  family = bernoulli("logit"),
+  prior = prior_list_fp,
+  data = df_model,
+  stanvars = stanvars,
+  seed = seed,
+  refresh = 1000,
+  # iter = iter,
+  # control = list(adapt_delta = adapt_delta),
+  # sample_prior = "only"
+  sample_prior = TRUE
+)
+```
+
+### Model Checks
+
+```{r}
+sp <- rstan::get_sampler_params(fit_fp$fit, inc_warmup = FALSE)
+ebfmi_per_chain <- sapply(sp, function(chain_mat) {
+  ener <- chain_mat[,"energy__"]
+  mean(diff(ener)^2) / var(ener)
+})
+print(ebfmi_per_chain)
+```
+
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+bayesplot::mcmc_pairs(
+  as.array(fit_fp), 
+  pars = c(
+    "b_Intercept", 
+    "sd_adm_name__Intercept", 
+    "sd_adm_name:cluster__Intercept", 
+    "b_rural",
+    "b_live_with_partner",
+    "b_over_18",
+    "bsp_moschool_level", 
+    "b_dev_value_price_index_reg_anomaly_12m",
+    # "bsp_moprice_index_reg_anomaly_12m",
+    "b_clim"
+  ),
+  np = nuts_params(fit_fp),
+  np_style = pairs_style_np(
+    div_color = "green",
+    div_shape = 20,
+    div_size = 3
+  )
+)
+```
+
+```{r}
+plot(fit_fp, variable = "prior_b", regex = TRUE, nvariables = 3)
+```
+
+```{r}
+plot(fit_fp, variable = "b_rural", regex = TRUE, nvariables = 3)
+```
+
+```{r}
+bayestestR::effective_sample(fit_fp)
+```
+
+### Model Output
+
+#### Summary
+
+##### Raw draws
+
+```{r}
+bayestestR::describe_posterior(
+  fit_fp,
+  effects = "all",
+  component = "all",
+  test = c("p_direction", "p_significance"),
+  centrality = "all",
+  ci_method = "HDI"
+)
+```
+
+##### Transformed draws
+
+```{r}
+trans_post_fp <- (
+  fit_fp
+  %>% as.data.frame()
+  %>% select(
+    -c(
+      contains("adm_name"),
+      contains("prior"),
+      lprior, 
+      lp__,
+      Intercept
+    )
+  )
+  %>% mutate(
+    across(
+      -c(contains("simo")),
+      ~ exp(.)
+    )
+  )
+)
+```
+
+```{r}
+bayestestR::describe_posterior(
+  trans_post_fp,
+  effects = "all",
+  component = "all",
+  test = c(),
+  centrality = "all",
+  ci_method = "HDI"
+)
+```
+
+#### Climate Marginal Effects
+
+##### Population level
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+(
+  plot_continuous_marginal(fit_fp, df_model, covs = c("clim"))
+  + scale_y_continuous(
+    # limits = c(0, 0.43),
+    labels = scales::percent_format(accuracy = 1)
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = paste0("marginal_prob_clim_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_fp_food_test.png")
+)
+```
+
+#### Covariate Posterior Distribution
+
+##### Log odds
+
+```{r}
+df_cov_post_fp <- (
+  fit_fp
+  %>% as_tibble()
+  %>% select(
+    b_clim,
+    b_rural,
+    b_live_with_partner,
+    b_over_18,
+    bsp_moschool_level,
+    bsp_movalue_price_index_reg_anomaly_12m
+  )
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    median_val = median(value),
+    lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+    upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+    lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+    upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+  )
+  %>% ungroup()
+  %>% mutate(
+    type = "fp"
+  )
+)
+```
+
+```{r}
+df_cov_post_comb <- bind_rows(df_cov_post_adm_clu, df_cov_post_fp)
+```
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+dodge <- ggstance::position_dodgev(height = 0.8)
+
+lims <- c(
+  min(df_cov_post_comb$lower2_val, -0.05), 
+  max(df_cov_post_comb$upper2_val)
+)
+
+p <- (
+  df_cov_post_comb
+  %>% ggplot(
+    mapping = aes(
+      y = fct_reorder(variable, desc(median_val)),
+      color = type
+    )
+  )
+  + geom_segment(
+    mapping = aes(
+      x = lower2_val,
+      xend = upper2_val
+    ),
+    position = dodge,
+    linewidth = 1
+  )
+  + geom_segment(
+    mapping = aes(
+      x = lower1_val,
+      xend = upper1_val
+    ),
+    position = dodge,
+    linewidth = 2
+  )
+  + geom_point(
+    mapping = aes(
+      x = median_val,
+    ),
+    size = 3,
+    position = dodge,
+  )
+  + geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "black"
+  )
+  + scale_x_continuous(
+    limits = lims
+  )
+  + scale_y_discrete(
+    labels = c(
+      "b_clim" = "Heat exposure",
+      "b_rural" = "Rural",
+      "b_over_18" = "Over 18",
+      "b_live_with_partner" = "Live with partner",
+      "bsp_moschool_level" = "Schooling level",
+      "bsp_movalue_price_index_reg_anomaly_12m" = "Price anomaly"
+    )
+  )
+  + scale_color_manual(
+    values = c(
+      "no_fp" = col_palette[5],
+      "fp" = col_palette[1]
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),,
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 14),
+    axis.text = element_text(size = 13),
+  )
+  + labs(
+    y = "Country",
+    x = "Effect Size"
+  )
+  + guides(
+    color = "none"
+  )
+)
+
+p
+
+ggsave(
+  path = fig_dir,
+  filename = paste0("cov_post_comb_", clim_label, "_", pop_label, "_", viol_label, "_moz_food_test.png")
+)
+```
+
+##### OR 
+
+```{r}
+df_cov_or_fp <- (
+  fit_fp
+  %>% as_tibble()
+  %>% select(
+    b_clim,
+    b_rural,
+    b_live_with_partner,
+    b_over_18,
+    bsp_moschool_level,
+    bsp_movalue_price_index_reg_anomaly_12m
+  )
+  %>% pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "value"
+  )
+  %>% mutate(
+    value = exp(value)
+  )
+  %>% group_by(variable)
+  %>% summarise(
+    median_val = median(value),
+    lower1_val = bayestestR::hdi(value, ci = 0.5)$CI_low,
+    upper1_val = bayestestR::hdi(value, ci = 0.5)$CI_high,
+    lower2_val = bayestestR::hdi(value, ci = 0.95)$CI_low,
+    upper2_val = bayestestR::hdi(value, ci = 0.95)$CI_high,
+  )
+  %>% ungroup()
+  %>% mutate(
+    type = "fp"
+  )
+)
+```
+
+```{r}
+df_cov_or_comb <- bind_rows(df_cov_or_adm_clu, df_cov_or_fp)
+```
+
+
+```{r}
+#| fig-width: 5
+#| fig-height: 3
+
+dodge <- ggstance::position_dodgev(height = 0.8)
+
+lims <- c(
+  min(df_cov_or_comb$lower2_val, 0.95), 
+  max(df_cov_or_comb$upper2_val)
+)
+
+p <- (
+  df_cov_or_comb
+  %>% ggplot(
+    mapping = aes(
+      y = fct_reorder(variable, desc(median_val)),
+      color = type
+    )
+  )
+  + geom_segment(
+    mapping = aes(
+      x = lower2_val,
+      xend = upper2_val
+    ),
+    position = dodge,
+    linewidth = 1
+  )
+  + geom_segment(
+    mapping = aes(
+      x = lower1_val,
+      xend = upper1_val
+    ),
+    position = dodge,
+    linewidth = 2
+  )
+  + geom_point(
+    mapping = aes(
+      x = median_val,
+    ),
+    size = 3,
+    position = dodge,
+  )
+  + geom_vline(
+    xintercept = 1,
+    linetype = "dashed",
+    color = "black"
+  )
+  + scale_x_continuous(
+    limits = lims
+  )
+  + scale_y_discrete(
+    labels = c(
+      "b_clim" = "Heat exposure",
+      "b_rural" = "Rural",
+      "b_over_18" = "Over 18",
+      "b_live_with_partner" = "Live with partner",
+      "bsp_moschool_level" = "Schooling level",
+      "bsp_movalue_price_index_reg_anomaly_12m" = "Price anomaly"
+    )
+  )
+  + scale_color_manual(
+    values = c(
+      "no_fp" = col_palette[5],
+      "fp" = col_palette[1]
+    )
+  )
+  + theme(
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+    plot.background = element_blank(),
+    plot.title = element_text(size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 13, hjust = 0.5),,
+    axis.title.y = element_blank(),
+    axis.title.x = element_text(size = 14),
+    axis.text = element_text(size = 13),
+  )
+  + labs(
+    y = "Country",
+    x = "Odds Ratio"
+  )
+  + guides(
+    color = "none"
+  )
+)
+
+p
+
+ggsave(
+  path = fig_dir,
+  filename = paste0("cov_or_comb_", clim_label, "_", pop_label, "_", viol_label, "_moz_food_test.png")
+)
+```
+
+### Calibration Checks
+
+```{r}
+#| fig-width: 4
+#| fig-height: 3
+plot_calibration(fit_fp, df_model, outcome_var = viol_var)
+ggsave(
+  path = fig_dir,
+  filename = paste0("calibration_plot_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_fp_food_test.png")
+)
+```
+
+### Residuals Spatial Correlation Checks
+
+```{r}
+#| fig-width: 3.2
+#| fig-height: 3
+plot_moran(df_model, sf_vacs, fit = fit_fp, residuals = TRUE)
+ggsave(
+  path = fig_dir,
+  filename = paste0("moran_plot_res_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_fp_food_test.png")
+)
+```
+
+### Posterior Predictive Checks
+
+```{r}
+#| fig-width: 12
+#| fig-height: 2.5
+(
+  plot_ppc_rootogram(fit_fp, df_model, outcome_var = viol_var)
+  + theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.92, 0.8)
+  )
+)
+ggsave(
+  path = fig_dir,
+  filename = paste0("ppc_by_adm_main_effect_", clim_label, "_", pop_label, "_", viol_label, "_fp_food_test.png")
+)
+```
+

@@ -353,28 +353,31 @@ plot_ppc_rootogram <- function(fit, data, outcome_var, cred1 = 0.5, cred2 = 0.95
       )
     )
     + scale_x_reordered()
+    + scale_y_continuous(
+      labels = function(x) format(x * 100, nsmall = 0)
+    )
     + theme(
       panel.background = element_blank(),
       panel.grid = element_blank(),
       panel.border = element_rect(fill = NA, colour = "black", linewidth = 1),
       plot.background = element_blank(),
-      plot.title = element_text(size = 16),
-      plot.subtitle = element_text(size = 14),
+      plot.title = element_text(size = 14),
+      plot.subtitle = element_text(size = 13),
       axis.ticks.length = unit(4, "pt"),
       axis.ticks.x = element_blank(),
       axis.ticks.y = element_line(linewidth = 1),
-      axis.title = element_text(size = 16),
+      axis.title = element_text(size = 14),
       axis.text.x = element_blank(),
-      axis.text.y = element_text(size = 15),
+      axis.text.y = element_text(size = 13),
       legend.title = element_blank(),
-      legend.text = element_text(size = 15),
+      legend.text = element_text(size = 13, margin = margin()),
       legend.background = element_blank(),
-      strip.text = element_text(size = 15),
+      strip.text = element_text(size = 13),
       strip.background = element_blank()
     )
     + labs(
       x = "Districts",
-      y = "Average SV"
+      y = "NP violence (%)"
     )
   )
   p
@@ -951,8 +954,7 @@ plot_continuous_marginal <- function(fit, data, covs, grid_points = 20, ndraws =
       plot.subtitle = element_text(size = 13, hjust = 0.5),,
       axis.title.y = element_text(size = 14),
       axis.title.x = element_blank(),
-      axis.text.y = element_text(size = 13),
-      axis.text.x = element_text(size = 13),
+      axis.text = element_text(size = 12),
       legend.background = element_blank(),
       legend.title = element_blank(),
       legend.text = element_text(size = 13),
@@ -1026,7 +1028,7 @@ plot_single_continuous_marginal_by_group <- function(fit, data, cov, grid_points
       plot.title = element_text(size = 14, hjust = 0.5),
       plot.subtitle = element_text(size = 13, hjust = 0.5),,
       axis.title = element_text(size = 14),
-      axis.text = element_text(size = 13),
+      axis.text = element_text(size = 12),
       legend.background = element_blank(),
       legend.title = element_blank(),
       legend.text = element_text(size = 13),
@@ -1069,21 +1071,77 @@ plot_calibration <- function(fit, data, outcome_var) {
     )
   )
   
+  cases <- rel_diag$...1$cases
+  breaks <- seq(0, max(cases$x) + 0.02, by = 0.02)
+  hist_counts <- (
+    cases
+    %>% mutate(
+      bins = cut(
+        x = x,
+        breaks = breaks
+      )
+    )
+    %>% group_by(bins)
+    %>% summarise(
+      prop = n() / nrow(.)
+    )
+    %>% pull(prop)
+  )
+  breaks_full <- rep(breaks, each = 3)
+  breaks_full <- breaks_full[2:(length(breaks_full) - 1)]
+  hist_counts_full <- rep(hist_counts, each = 3)
+  hist_counts_full[seq(1, length(hist_counts_full), by = 3)] <- 0
+  hist_counts_full <- c(hist_counts_full, 0)
+  max_x <- max(
+    max(breaks_full),
+    max(rel_diag_est$x)
+  )
+  cons_reg <- (
+    rel_diag$...1$regions
+    %>% filter(cons_reg$x <= max_x)
+  )
+  # upper_lvls <- rel_diag$...1$regions$upper
+  # cep <- rel_diag_est$CEP_pav
+  # max_y <- max(
+  #   max(hist_counts_full),
+  #   max(upper_lvls[rel_diag_est$x < max(rel_diag_est$x)]),
+  #   max(cep[rel_diag_est$x < max(rel_diag_est$x)])
+  # )
+  
   cal_plot <- (
     ggplot()
-    + geom_point(
-      data = rel_diag$...1$cases,
+    # + geom_point(
+    #   data = sample_frac(rel_diag$...1$cases, 0.2),
+    #   mapping = aes(
+    #     x = x,
+    #     y = y
+    #   ),
+    #   alpha = 0.1,
+    #   color = col_palette[5],
+    #   fill = col_palette[6],
+    #   position = position_jitter(height = 0.05)
+    # )
+    # + geom_histogram(
+    #   data = rel_diag$...1$cases,
+    #   mapping = aes(
+    #     x = x,
+    #     y = after_stat(width * density)
+    #   ),
+    #   fill = NA,
+    #   color = col_palette[5],
+    #   linewidth = 1.2,
+    #   binwidth = 0.02
+    # )
+    + geom_line(
       mapping = aes(
-        x = x,
-        y = y
+        x = breaks_full,
+        y = hist_counts_full
       ),
-      alpha = 0.05,
       color = col_palette[5],
-      fill = col_palette[6],
-      position = position_jitter(height = 0.05)
+      linewidth = 1.1
     )
     + geom_ribbon(
-      data = rel_diag$...1$regions,
+      data = cons_reg,
       mapping = aes(
         x = x,
         ymin = lower,
@@ -1122,8 +1180,11 @@ plot_calibration <- function(fit, data, outcome_var) {
       linetype = "dashed"
     )
     + scale_x_continuous(
-      limits = c(min(rel_diag_est$x) - 0.002, max(rel_diag_est$x) + 0.005)
+      limits = c(0, max(rel_diag_est$x))
     )
+    # + scale_y_continuous(
+    #   limits = c(0, max_y)
+    # )
     + coord_cartesian(clip = "off")
     + labs(
       x = "Median Posterior\nPredictive",

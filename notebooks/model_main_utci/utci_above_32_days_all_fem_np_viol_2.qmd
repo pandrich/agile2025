@@ -1,5 +1,5 @@
 ---
-title: "Model temperature (rolling max temp) effect on non-partner sexual violence, all female"
+title: "Model UTCI (number of excess hot days) effect on non-partner sexual violence, all female"
 format: html
 editor: visual
 ---
@@ -45,7 +45,7 @@ cat(paste0("Using data files:\n", clim_fp_filename, "\n", clim_fp_viol_filename)
 
 ```{r}
 # Settings
-nb_name <-  "Model rolling temperature effect on non-partner sexual violence, all female"
+nb_name <-  "Model effect of excess number of high UTCI days on non-partner sexual violence, all female"
 seed <- sum(sapply(str_split(nb_name, pattern = "", simplify = TRUE), FUN = utf8ToInt))
 set.seed(seed)
 
@@ -69,8 +69,8 @@ label_map <- c(
 
 # Var settings
 countries <- c("Lesotho", "Mozambique", "Namibia", "Zambia", "Zimbabwe")
-clim_var <- "dev_value_temp_roll_max_12m"
-clim_label <- "max_temp_roll"
+clim_var <- "dev_value_utci_above_32_12m"
+clim_label <- "excess_utci_above_32_days"
 viol_var <- "sv_np"
 viol_label <- "np_viol"
 pop_label <- "all_female"
@@ -2923,7 +2923,7 @@ prior_list_fp <- c(
   prior(normal(0, 0.8 / sqrt(num_pred)), class = "b"),
   prior(exponential(1/0.2), class = "sd"),
   # prior(dirichlet(1), class = "simo", coef = "movalue_food_price_hist_anomaly_12m1")
-  # prior(dirichlet(1), class = "simo", coef = "movalue_food_price_reg_anomaly_12m1"),
+  prior(dirichlet(1), class = "simo", coef = "movalue_food_price_reg_anomaly_12m1"),
   prior(dirichlet(1), class = "simo", coef = "moschool_level1")
 )
 
@@ -2942,13 +2942,13 @@ form_fp <- bf(
         + mo(school_level)
         + clim
         + (1 | adm_name/cluster)
-        # + value_food_price_reg_anomaly_12m
+        + mo(value_food_price_reg_anomaly_12m)
         # + value_food_price_hist_anomaly_12m
         # + value_max_food_price_kg_12m
         # + value_food_price_stress_12m
         # + dev_value_food_price_reg_anomaly_12m
         # + dev_value_food_price_hist_anomaly_12m
-        + dev_value_max_food_price_kg_12m
+        # + dev_value_max_food_price_kg_12m
       )"
     )
   )
@@ -2992,7 +2992,7 @@ bayesplot::mcmc_pairs(
     "b_live_with_partner",
     "b_over_18",
     "bsp_moschool_level", 
-    "bsp_mofood_price_reg_anomaly_12m",
+    "bsp_movalue_food_price_reg_anomaly_12m",
     "b_clim"
   ),
   np = nuts_params(fit_fp),
